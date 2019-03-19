@@ -7,7 +7,6 @@ License: MIT License
 """
 
 import functools
-import numpy as np
 import tensorflow as tf
 
 
@@ -178,7 +177,7 @@ class SOMVAE:
         with tf.variable_scope("probabilities"):
             probabilities_raw = tf.Variable(tf.zeros(self.som_dim+self.som_dim), name="probabilities_raw")
             probabilities_positive = tf.exp(probabilities_raw)
-            probabilities_summed = tf.reduce_sum(probabilities_positive, axis=[-1,-2], keepdims=True)
+            probabilities_summed = tf.reduce_sum(probabilities_positive, axis=[-1, -2], keepdims=True)
             probabilities_normalized = probabilities_positive / probabilities_summed
             return probabilities_normalized
 

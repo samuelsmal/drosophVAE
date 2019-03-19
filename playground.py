@@ -75,7 +75,7 @@ def ex_config():
             MNIST time series.
         mnist (bool): Indicator if the model is trained on MNIST-like data.
     """
-    num_epochs = 2
+    num_epochs = 1
     patience = 100
     batch_size = 32
     latent_dim = 64
@@ -93,8 +93,8 @@ def ex_config():
     interactive = True
     data_set = "MNIST_data"
     save_model = False
-    time_series = True
-    mnist = True
+    time_series = False
+    mnist = False 
 
 # <codecell>
 
@@ -312,19 +312,38 @@ ploting_frames(joint_positions)
 
 # <codecell>
 
-fly_data = np.
+joint_positions.shape
 
 # <codecell>
 
-mnist = input_data.read_data_sets(f"../data/{ex_config()['data_set']}")
+# tensorflow data layout
+# (x, y, channels)
 
-data_train = np.reshape(mnist.train.images, [-1,28,28,1])
-labels_train = mnist.train.labels
-data_val = data_train[45000:]
-labels_val = labels_train[45000:]
-data_train = data_train[:45000]
-labels_train = data_train[:45000]
+# option 1
+resh = joint_positions.reshape(-1, 19, 3, 1)
 
+# option 2
+resh = joint_positions.reshape(-1, 19, 1, 3)
+
+# <codecell>
+
+resh.shape
+
+# <codecell>
+
+#mnist = input_data.read_data_sets(f"../data/{ex_config()['data_set']}")
+
+nb_of_data_points = 800 # 45000
+
+#data_train = np.reshape(mnist.train.images, [-1,28,28,1])
+#labels_train = mnist.train.labels
+data_train = resh
+# just generating some labels, no clue what they are for, maybe validation?
+labels_train = np.random.randint(0, 42, data_train.shape[0])
+data_val = data_train[nb_of_data_points:]
+labels_val = labels_train[nb_of_data_points:]
+data_train = data_train[:nb_of_data_points]
+labels_train = data_train[:nb_of_data_points]
 
 @ex.capture
 def get_data_generator(time_series):
@@ -444,7 +463,6 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
                 pbar.close()
 
 
-
 @ex.capture
 def evaluate_model(model, x, modelpath, batch_size):
     """Evaluates the performance of the trained model in terms of normalized
@@ -491,7 +509,7 @@ def evaluate_model(model, x, modelpath, batch_size):
     return results
  
 
-@ex.automain
+@ex.main
 def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, mnist):
     """Main method to build a model, train it and evaluate it.
     
@@ -511,9 +529,12 @@ def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, t
         dict: Results of the evaluation (NMI, Purity, MSE).
     """
     # Dimensions for MNIST-like data
-    input_length = 28
-    input_channels = 28
-    x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
+    #input_length = 28
+    #input_channels = 28
+    #x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
+    input_length = 19
+    input_channels = 3
+    x = tf.placeholder(tf.float32, shape=[None, input_length, 1, input_channels])
 
     data_generator = get_data_generator()
 
@@ -531,6 +552,10 @@ def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, t
         shutil.rmtree(os.path.dirname(modelpath))
 
     return result
+
+# <codecell>
+
+ex.run()
 
 # <codecell>
 
