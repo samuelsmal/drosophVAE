@@ -37,16 +37,12 @@ from sacred.stflow import LogFileWriter
 
 # <codecell>
 
-from som_vae import somvae_model
+from som_vae.somvae_model import SOMVAE
 from som_vae.utils import *
 
 # <codecell>
 
-from importlib import reload
-
-# <codecell>
-
-ex = sacred.Experiment("how", interactive=True) # set interactive to true if you run this in a jupyter notebook
+ex = sacred.Experiment("replicating", interactive=True)
 ex.observers.append(sacred.observers.FileStorageObserver.create("./sacred_runs"))
 ex.captured_out_filter = sacred.utils.apply_backspaces_and_linefeeds
 
@@ -79,7 +75,7 @@ def ex_config():
             MNIST time series.
         mnist (bool): Indicator if the model is trained on MNIST-like data.
     """
-    num_epochs = 1
+    num_epochs = 10
     patience = 100
     batch_size = 32
     latent_dim = 64
@@ -95,273 +91,22 @@ def ex_config():
     logdir = "./logs/{}".format(ex_name)
     modelpath = "./models/{}/{}.ckpt".format(ex_name, ex_name)
     interactive = True
-    data_set = "fly_data"
-    save_model = False
-    time_series = False 
-    mnist = False 
+    data_set = "MNIST_data"
+    save_model = True 
+    time_series = True 
+    mnist = False
 
 # <codecell>
 
-# -*- coding: utf-8 -*-
-# <nbformat>4</nbformat>
-
-# <markdowncell>
-
-# # Imports
-
-# <codecell>
-
-
-# <codecell>
-
-import sys
-sys.path.append('/home/samuel/')
-
-from drosophpose.GUI import skeleton
-
-
-LEGS = [0, 1, 2, 5, 6, 7]
-LEGS = [0, 1, 2] #, 5, 6, 7] # since we do not care about the other side
-CAMERA_OF_INTEREST = 1
-NB_OF_AXIS = 2
-NB_TRACKED_POINTS = 5 # per leg, igoring the rest for now
-NB_CAMERAS = 7
-NB_RECORDED_DIMESIONS = 2
-
-FRAMES_PER_SECOND = 100
-NYQUIST_FREQUENCY_OF_MEASUREMENTS = FRAMES_PER_SECOND / 2
-
-# <codecell>
-
-POSE_DATA_PATH = "/ramdya-nas/SVB/181220_Rpr_R57C10_GC6s_tdTom/001_coronal/behData/images_renamed/pose_result__mnt_NAS_SVB_181220_Rpr_R57C10_GC6s_tdTom_001_coronal_behData_images_renamed.pkl"
-
-# <markdowncell>
-
-# # Loading data
-
-# <markdowncell>
-
-# ## loading 
-
-# <codecell>
-
-def load_data(path=POSE_DATA_PATH):
-    with open(POSE_DATA_PATH, 'rb') as f:
-        pose_data_raw = pickle.load(f)
-        return pose_data_raw['points2d']
-
-# <markdowncell>
-
-# ## simple checks
-
-# <codecell>
-
-def _check_shape_(joint_positions):
-    """ should be (7, <nb frames>, 38, 2)
-    7 for the images, some should be 0 because it didn't record the images for these points
-    1000 for the nb of frames
-    38 for the features (some for the legs ...) check skeleton.py in semigh's code
-    2 for the pose dimensions
-    """
-    s = joint_positions.shape
-    
-    if s[0] != NB_CAMERAS or s[2] != len(skeleton.tracked_points) or s[3] != NB_RECORDED_DIMESIONS:
-        raise ValueError(f"shape of pose data is wrong, it's {joint_positions.shape}")
-        
-    return joint_positions 
-
-def _crude_value_check_(joint_positions):
-    if np.sum(joint_positions == 0) == np.product(joint_positions.shape):
-        raise ValueError('not every value should be zero')
-        
-    return joint_positions
-
-def _simple_checks_(data):
-    return reduce(lambda acc, el: el(acc), [_check_shape_, _crude_value_check_], data)
-
-# <markdowncell>
-
-# ## extracting data of interest
-
-# <codecell>
-
-def _get_camera_of_interest_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
-    return joint_positions[CAMERA_OF_INTEREST]
-
-def _get_visible_legs_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
-    idx_visible_joints = [skeleton.camera_see_joint(CAMERA_OF_INTEREST, j) for j in range(len(skeleton.tracked_points))]
-    return joint_positions[:, idx_visible_joints, :]
-
-# <codecell>
-
-def get_data(path=POSE_DATA_PATH):
-    return reduce(lambda acc, el: el(acc), 
-                  [_get_camera_of_interest_, _get_visible_legs_],
-                  _simple_checks_(load_data(path)))
-
-
-# <markdowncell>
-
-# ## adding third dimension
-
-# <codecell>
-
-def add_third_dimension(joint_positions):
-    # just add a z-axis
-    # assumes that the positional data is in the last axis
-    paddings = [[0, 0] for i in joint_positions.shape]
-    paddings[-1][1] = 1
-
-    return np.pad(joint_positions, paddings, mode='constant', constant_values=0)
-
-# <markdowncell>
-
-# ## executing
-
-# <codecell>
-
-joint_positions = add_third_dimension(get_data())
-
-NB_FRAMES = joint_positions.shape[1]
-
-# <codecell>
-
-for leg in LEGS:
-    print("{0:.3}% of the data for leg {1} is 0".format((joint_positions[:, leg:leg+5, :2] == 0).mean(), leg))
-
-# <markdowncell>
-
-# # Checking data
-
-# <codecell>
-
-def _get_feature_name_(tracking_id):
-    return str(skeleton.tracked_points[tracking_id])[len('Tracked.'):]
-
-def _get_feature_id_(leg_id, tracking_point_id):
-    if leg_id < 3:
-        return leg_id * 5 + tracking_point_id
-    else:
-        return (leg_id - 5) * 5 + tracking_point_id + 19
-
-# <codecell>
-
-def ploting_frames(joint_positions):
-    for leg in LEGS:
-        fig, axs = plt.subplots(1, NB_OF_AXIS, sharex=True, figsize=(20, 10))
-        for tracked_point in range(NB_TRACKED_POINTS):
-            for axis in range(NB_OF_AXIS):
-                cur_ax = axs[axis]
-                cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
-                if axis == 0:
-                    cur_ax.set_ylabel('x pos')
-                else:
-                    cur_ax.set_ylabel('y pos')
-                cur_ax.legend(loc='upper right')
-                cur_ax.set_xlabel('frame')
-
-        #plt.xlabel('frame')
-        #plt.legend(loc='lower right')
-        plt.suptitle('leg ' + str(leg))
-
-# <codecell>
-
-ploting_frames(joint_positions)
-
-# <markdowncell>
-
-# ## Normalization
-
-# <codecell>
-
-def normalize(joint_positions, using_median=True, to_probability_distr=False):
-    # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
-    if using_median:
-        return joint_positions - np.median(joint_positions.reshape(-1, 3), axis=0)
-    elif to_probability_distr:
-        return
-    else:
-        raise NotImplementedError
-
-# <codecell>
-
-def normalize_ts(time_series, ax=0):
-    # for shape (frame,feat)
-    eps = 0.0001
-    print("shapes:", np.shape(np.transpose(time_series)), np.shape(np.mean(np.transpose(time_series), axis=ax)))
-#     n_time_series = (np.transpose(time_series) - np.mean(np.transpose(time_series), axis=ax))/(np.std(np.transpose(time_series), axis=ax) + eps)
-    norm = np.sum(np.transpose(time_series), axis=ax); norm = np.transpose(norm) #shape = 1,frames
-    n_time_series = np.transpose(time_series) / np.sum(np.transpose(time_series), axis=ax)
-    n_time_series = np.transpose(n_time_series)
-#     n_time_series = np.zeros(shape=np.shape(time_series))
-#     for i in range(np.shape(time_series)[1]):
-#         n_time_series[:,i] = (time_series[:,i] - np.mean(time_series[:,i])) / (np.std(time_series[:,i]) + eps)
-    return n_time_series, norm
-
-
-def normalize_pose(points3d, median3d=False):
-    # normalize experiment
-    if median3d:
-        points3d -= np.median(points3d.reshape(-1, 3), axis=0)
-    else:
-        for i in range(np.shape(points3d)[1]): #frames
-            for j in range(np.shape(points3d)[2]): #xyz
-                points3d[:,i,j] = normalize_ts(points3d[:,i,j]) 
-    return points3d
-
-# <codecell>
-
-joint_positions = normalize(joint_positions)
-
-# <codecell>
-
-ploting_frames(joint_positions)
-
-# <codecell>
-
-joint_positions.shape
-
-# <codecell>
-
-# tensorflow data layout
-# (x, y, channels)
-
-# option 1
-resh = joint_positions.reshape(-1, 19, 3, 1)
-
-# option 2
-#resh = joint_positions.reshape(-1, 19, 1, 3)
-
-# option 3, flat
-resh = joint_positions.reshape(-1, 1, 1, 3 * 19)
-
-# <codecell>
-
-reload(somvae_model)
-
-# <codecell>
-
-## mnist
-#mnist = input_data.read_data_sets(f"../data/{ex_config()['data_set']}")
-#nb_of_data_points = 45000
-#data_train = np.reshape(mnist.train.images, [-1,28,28,1])
-#labels_train = mnist.train.labels
-
-## fly data
-nb_of_data_points = 800 
-data_train = resh
-# just generating some labels, no clue what they are for except validation?
-labels_train = np.array(list(range(resh.shape[0])))
-
+mnist = input_data.read_data_sets(f"../data/{ex_config()['data_set']}")
+
+nb_of_data_points = 45000
+data_train = np.reshape(mnist.train.images, [-1,28,28,1])
+labels_train = mnist.train.labels
 data_val = data_train[nb_of_data_points:]
 labels_val = labels_train[nb_of_data_points:]
 data_train = data_train[:nb_of_data_points]
 labels_train = data_train[:nb_of_data_points]
-
-
-# <codecell>
-
-## helper code
 
 @ex.capture
 def get_data_generator(time_series):
@@ -437,8 +182,11 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
 
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     summaries = tf.summary.merge_all()
+    
+    session_config = tf.ConfigProto()
+    session_config.gpu_options.allow_growth = True
 
-    with tf.Session() as sess:
+    with tf.Session(config=session_config) as sess:
         sess.run(tf.global_variables_initializer())
         patience_count = 0
         test_losses = []
@@ -498,10 +246,8 @@ def evaluate_model(model, x, modelpath, batch_size):
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
 
     num_batches = len(data_val)//batch_size
-    cfg = tf.ConfigProto()
-    cfg.gpu_options.allow_growth = True
 
-    with tf.Session(config=cfg) as sess:
+    with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, modelpath)
 
@@ -529,14 +275,6 @@ def evaluate_model(model, x, modelpath, batch_size):
     return results
  
 
-
-# <codecell>
-
-resh.shape
-
-# <codecell>
-
-reload(somvae_model)
 @ex.main
 def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, mnist):
     """Main method to build a model, train it and evaluate it.
@@ -557,20 +295,18 @@ def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, t
         dict: Results of the evaluation (NMI, Purity, MSE).
     """
     # Dimensions for MNIST-like data
-    #input_length = 28
-    #input_channels = 28
-    #x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
-    input_length = 1
-    input_channels = 19 * 3
-    x = tf.placeholder(tf.float32, shape=[None, 1, 1, input_channels])
-    #x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1])
+    input_length = 28
+    input_channels = 28
+    x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
+    #input_length = 19
+    #input_channels = 3
     #x = tf.placeholder(tf.float32, shape=[None, input_length, 1, input_channels])
 
     data_generator = get_data_generator()
 
     lr_val = tf.placeholder_with_default(learning_rate, [])
 
-    model = somvae_model.SOMVAE(inputs=x, latent_dim=latent_dim, som_dim=som_dim, learning_rate=lr_val, decay_factor=decay_factor,
+    model = SOMVAE(inputs=x, latent_dim=latent_dim, som_dim=som_dim, learning_rate=lr_val, decay_factor=decay_factor,
             input_length=input_length, input_channels=input_channels, alpha=alpha, beta=beta, gamma=gamma,
             tau=tau, mnist=mnist)
 
@@ -588,17 +324,66 @@ def main(latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, t
 import os
 #os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-tf.reset_default_graph()
+# <codecell>
 
-res, model = ex.run(config_updates={'mnist': False, 'num_epochs': 2, 'time_series': False} save_model=True)
+tf.reset_default_graph()
 
 # <codecell>
 
+#    num_epochs = 10
+#    patience = 100
+#    batch_size = 32
+#    latent_dim = 64
+#    som_dim = [8,8]
+#    learning_rate = 0.0005
+#    alpha = 1.0
+#    beta = 0.9
+#    gamma = 1.8
+#    tau = 1.4
+#    decay_factor = 0.9
+#    name = ex.get_experiment_info()["name"]
+#    ex_name = "{}_{}_{}-{}_{}_{}".format(name, latent_dim, som_dim[0], som_dim[1], str(date.today()), uuid.uuid4().hex[:5])
+#    logdir = "./logs/{}".format(ex_name)
+#    modelpath = "./models/{}/{}.ckpt".format(ex_name, ex_name)
+#    interactive = True
+#    data_set = "MNIST_data"
+#    save_model = True 
+#    time_series = True 
+#    mnist = False
+
+# <codecell>
+
+res = ex.run(config_updates={'mnist': False, 'num_epochs': 2, 'time_series': False})
+
+# <codecell>
+
+
+
+# <codecell>
+
+PATH=/usr/local/cuda-9.0/bin/:$PATH LD_LIBRARY_PATH=~/Downloads/cudnn-10.0-linux-x64-v7.3.0.29/cuda/lib64/:$LD_LIBRARY_PATH jupyter notebook   
+
+# <codecell>
+
+# 3 epoch
 res.result
 
 # <codecell>
 
-model
+# 1 epoch
+res.result
+
+# <codecell>
+
+ls models/
+
+# <codecell>
+
+ls 
+
+# <codecell>
+
+tf.test.gpu_device_name()
 
 # <codecell>
 
