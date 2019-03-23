@@ -108,12 +108,11 @@ def lazy_scope(function):
 class SOMVAE:
     """Class for the SOM-VAE model as described in https://arxiv.org/abs/1806.02199"""
 
-    def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
+    def __init__(self, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
             input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1., mnist=True):
         """Initialization method for the SOM-VAE model object.
         
         Args:
-            inputs (tf.Tensor): The input tensor for the model.
             latent_dim (int): The dimensionality of the latent embeddings (default: 64).
             som_dim (list): The dimensionality of the self-organizing map (default: [8,8]).
             learning_rate (float): The learning rate for the optimization (default: 1e-4).
@@ -128,7 +127,6 @@ class SOMVAE:
             tau (float): The weight for the smoothness loss (default: 1.).
             mnist (bool): Flag that tells the model if we are training in MNIST-like data (default: True).
         """
-        self.inputs = inputs
         self.latent_dim = latent_dim
         self.som_dim = som_dim
         self.learning_rate = learning_rate
@@ -162,6 +160,15 @@ class SOMVAE:
         self.loss
         self.optimize
 
+
+    def fit(self, X):
+        self.inputs = X
+
+        config = tf.ConfigProto(allow_soft_placement=True)
+        config.gpu_options.allow_growth = True
+
+        self.sess = tf.Session(config=config)
+        self.sess.run(tf.global_variables_initializer())
 
     @lazy_scope
     def embeddings(self):

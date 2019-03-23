@@ -590,7 +590,43 @@ import os
 
 tf.reset_default_graph()
 
-res, model = ex.run(config_updates={'mnist': False, 'num_epochs': 2, 'time_series': False} save_model=True)
+res = ex.run(config_updates={'mnist': False, 'num_epochs': 2, 'time_series': False})
+
+# <codecell>
+
+res.config['modelpath']
+
+# <codecell>
+
+ls models/
+
+# <codecell>
+
+res.config
+
+# <codecell>
+
+reload(somvae_model)
+
+tf.reset_default_graph()
+input_length = 1
+input_channels = 19 * 3
+x = tf.placeholder(tf.float32, shape=[None, 1, 1, input_channels])
+#x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1])
+#x = tf.placeholder(tf.float32, shape=[None, input_length, 1, input_channels])
+
+data_generator = get_data_generator()
+learning_rate = 0.0005
+lr_val = tf.placeholder_with_default(learning_rate, [])
+
+model = somvae_model.SOMVAE(inputs=x, input_length=input_length, input_channels=input_channels, mnist=False)
+train_model(model, x, lr_val, generator=data_generator)
+
+result = evaluate_model(model, x)
+
+# <codecell>
+
+model.z_e.eval()
 
 # <codecell>
 
