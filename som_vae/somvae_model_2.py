@@ -160,15 +160,65 @@ class SOMVAE:
         self.loss
         self.optimize
 
+        self.inputs
+        self.sess
 
-    def fit(self, X):
-        self.inputs = X
 
+    def fit(self):
         config = tf.ConfigProto(allow_soft_placement=True)
         config.gpu_options.allow_growth = True
 
         self.sess = tf.Session(config=config)
         self.sess.run(tf.global_variables_initializer())
+
+        train_gen = generator("train", batch_size)
+        val_gen = generator("val", batch_size)
+
+        num_batches = len(data_train)//batch_size
+
+        saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
+        summaries = tf.summary.merge_all()
+
+        sess.run(tf.global_variables_initializer())
+        patience_count = 0
+        test_losses = []
+        with LogFileWriter(ex):
+            train_writer = tf.summary.FileWriter(logdir+"/train", sess.graph)
+            test_writer = tf.summary.FileWriter(logdir+"/test", sess.graph)
+            print("Training...")
+            train_step_SOMVAE, train_step_prob = self.optimize
+            try:
+                if interactive:
+                    pbar = tqdm(total=num_epochs*(num_batches)) 
+                for epoch in range(num_epochs):
+                    batch_val = next(val_gen)
+                    test_loss, summary = sess.run([self.loss, summaries], feed_dict={x: batch_val})
+                    test_losses.append(test_loss)
+                    test_writer.add_summary(summary, tf.train.global_step(sess, self.global_step))
+                    if test_losses[-1] == min(test_losses):
+                	saver.save(sess, modelpath, global_step=epoch)
+                	patience_count = 0
+                    else:
+                	patience_count += 1
+                    if patience_count >= patience:
+                	break
+                    for i in range(num_batches):
+                	batch_data = next(train_gen)
+                	if i%100 == 0:
+                	    train_loss, summary = sess.run([self.loss, summaries], feed_dict={x: batch_data})
+                	    train_writer.add_summary(summary, tf.train.global_step(sess, self.global_step))
+                	train_step_SOMVAE.run(feed_dict={x: batch_data, lr_val:learning_rate})
+                	train_step_prob.run(feed_dict={x: batch_data, lr_val:learning_rate*100})
+                	if interactive:
+                	    pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
+                	    pbar.update(1)
+
+            except KeyboardInterrupt:
+        	pass
+            finally:
+        	saver.save(sess, modelpath)
+        	if interactive:
+        	    pbar.close()
 
     @lazy_scope
     def embeddings(self):

@@ -257,8 +257,6 @@ def generate_and_save_images(model, epoch, test_input):
   #plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
   plt.show()
 
-# <codecell>
-
 generate_and_save_images(model, 0, random_vector_for_generation)
 session_config = tf.ConfigProto()
 session_config.gpu_options.allow_growth = True
@@ -319,8 +317,6 @@ with imageio.get_writer('cvae.gif', mode='I') as writer:
     
 # this is a hack to display the gif inside the notebook
 os.system('cp cvae.gif cvae.gif.png')
-
-# <codecell>
 
 display.Image(filename="cvae.gif.png")
 
