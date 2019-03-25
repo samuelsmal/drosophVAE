@@ -309,12 +309,10 @@ class SOMVAE:
                 print(f"shape of h3 (recon q): {h_3.shape}")
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
                 # TODO rename input_channels
+                # old version based on normalised data
                 #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
                 x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
-                #x_hat = tf.reshape(x_hat, [-1, np.prod(tf.shape(self.inputs)[1:])])# [-1, 1, self.input_length, self.input_channels])
                 print(f"x_hat shape (recon q): {x_hat.shape}")
-                # TODO ask semigh
-                # reshape or dense (-> would imply other issue somewhere else?
                 x_hat = tf.reshape(x_hat, [-1, 1, self.input_length, self.input_channels])
         print(f"x_hat shape (recon q): {x_hat.shape}")
         return x_hat
@@ -347,9 +345,10 @@ class SOMVAE:
     def loss_reconstruction(self):
         """Computes the combined reconstruction loss for both reconstructions."""
         print(f"shapes for input {self.inputs.shape}, recon q {self.reconstruction_q.shape}, recon e {self.reconstruction_e.shape}")
-        loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
+        #loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.reconstruction_e)
-        loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
+        #loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
+        loss_rec_mse = loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
         return loss_rec_mse
 
