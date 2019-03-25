@@ -310,9 +310,11 @@ class SOMVAE:
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
                 # TODO rename input_channels
                 #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
-                print(f"input channels (recon q): {self.input_channels}")
-                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
                 #x_hat = tf.reshape(x_hat, [-1, np.prod(tf.shape(self.inputs)[1:])])# [-1, 1, self.input_length, self.input_channels])
+                print(f"x_hat shape (recon q): {x_hat.shape}")
+                # TODO ask semigh
+                # reshape or dense (-> would imply other issue somewhere else?
                 x_hat = tf.reshape(x_hat, [-1, 1, self.input_length, self.input_channels])
         print(f"x_hat shape (recon q): {x_hat.shape}")
         return x_hat
@@ -335,7 +337,8 @@ class SOMVAE:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_e)
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
                 #x_hat = tf.reshape(x_hat, [-1, self.input_length, self.input_channels, 1])
         return x_hat
 
