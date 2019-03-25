@@ -40,6 +40,7 @@ from importlib import reload
 
 import pathlib
 import logging
+import datetime
 
 # <codecell>
 
@@ -338,8 +339,12 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
 
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     summaries = tf.summary.merge_all()
-
-    with tf.Session() as sess:
+    
+    session_config = tf.ConfigProto()
+    session_config.gpu_options.allow_growth = True  
+    session_config.gpu_options.polling_inactive_delay_msecs = 10
+    
+    with tf.Session(config=session_config) as sess:
         sess.run(tf.global_variables_initializer())
         patience_count = 0
         train_losses = []
@@ -405,20 +410,27 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
     
     
     num_batches = len(data)//batch_size
-
-    with tf.Session() as sess:
+    
+    session_config = tf.ConfigProto()
+    session_config.gpu_options.allow_growth = True 
+    session_config.gpu_options.polling_inactive_delay_msecs = 10
+    
+    with tf.Session(config=session_config) as sess:
+        
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, modelpath)
 
         test_k_all = []
         test_rec_all = []
+        test_rec_encoding = []
         test_mse_all = []
         print("Evaluation...")
         for i in range(num_batches):
             batch_data = data[i*batch_size:(i+1)*batch_size]
             test_k_all.extend(sess.run(model.k, feed_dict={x: batch_data}))
             test_rec = sess.run(model.reconstruction_q, feed_dict={x: batch_data})
-            test_rec_all.extend(test_rec)
+            _t = sess.run(model.reconstruction_e, feed_dict={x: batch_data})
+            test_rec_encoding.extend(_t)
             test_mse_all.append(mean_squared_error(test_rec.flatten(), batch_data.flatten()))
 
         test_nmi = compute_NMI(test_k_all, labels[:len(test_k_all)])
@@ -431,7 +443,7 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
     results["MSE"] = test_mse
 #    results["optimization_target"] = 1 - test_nmi
 
-    return results, test_rec_all, test_k_all
+    return results, test_rec_all, test_k_all, test_rec_encoding
 
 # <codecell>
 
@@ -517,28 +529,28 @@ Params:
 __name__ = "without_sacred"
 __latent_dim__ = 64
 __som_dim__ = [8,8]
-__ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0], __som_dim__[1], str(date.today()), uuid.uuid4().hex[:5])
+__ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0], __som_dim__[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), uuid.uuid4().hex[:5])
 
 config = {
-    "num_epochs": 2000,
+    "num_epochs": 200,
     "patience": 100,
-    "batch_size": 1000,
+    "batch_size": 32,
     "latent_dim": __latent_dim__,
     "som_dim": __som_dim__,
     "learning_rate": 0.0005,
-    "alpha": 1.0,
-    "beta": 0.9,
-    "gamma": 1.8,
-    "tau": 1.4,
+    "alpha": 0, # 1.0,
+    "beta": 0, # 0.9,
+    "gamma": 0, # 1.8,
+    "tau": 0, # 1.4,
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
     "logdir": "../logs/{}".format(__ex_name__),
     "modelpath": "../models/{0}/{0}.ckpt".format(__ex_name__),
-    "interactive": True,
+    "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": True,
+    "time_series": False,
     "mnist": False,
 }
 
@@ -592,12 +604,20 @@ data = {
 
 # <codecell>
 
-p = pathlib.Path(config['modelpath']).parent
-p.mkdir(parents=True)
+# creating path to store model
+pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 # <markdowncell>
 
 # ## running fit & test
+
+# <codecell>
+
+reload(somvae_model)
+
+# <codecell>
+
+#tf.logging.set_verbosity(tf.logging.INFO)
 
 # <codecell>
 
@@ -622,11 +642,20 @@ plt.title('loss')
 
 # <codecell>
 
+# res[3] corresponds to the encoding reconstruction
+((data['X_train'] - np.array(res[3])) ** 2).mean()
+
+# <codecell>
+
 plt.hist(res[2])
 
 # <codecell>
 
-ploting_frames(add_third_dimension(np.array(res[1]).reshape(-1, 19, 2)))
+ploting_frames(add_third_dimension(np.array(res[3]).reshape(-1, 19, 2)))
+
+# <codecell>
+
+ploting_frames(joint_positions)
 
 # <codecell>
 
@@ -779,13 +808,14 @@ def display_gif(path):
 
 idx = 0
 os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]));
+display.Image(filename="{}.png".format(gif_file_paths[idx]))
+
 
 # <codecell>
 
 idx = 1
 os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]));
+display.Image(filename="{}.png".format(gif_file_paths[idx]))
 
 # <codecell>
 
