@@ -299,11 +299,9 @@ class SOMVAE:
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_q)
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
                 # old version based on normalised data
-                #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
-                x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
-                print(f"x_hat shape (recon q): {x_hat.shape}")
-                x_hat = tf.reshape(x_hat, [-1, 1, self.input_length, self.input_channels])
-        print(f"x_hat shape (recon q): {x_hat.shape}")
+                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                #x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
+                #x_hat = tf.reshape(x_hat, [-1, 1, self.input_length, self.input_channels])
         return x_hat
 
 
@@ -324,8 +322,8 @@ class SOMVAE:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_e)
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
-                x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
+                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                #x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
                 #x_hat = tf.reshape(x_hat, [-1, self.input_length, self.input_channels, 1])
         return x_hat
 
@@ -333,11 +331,9 @@ class SOMVAE:
     @lazy_scope
     def loss_reconstruction(self):
         """Computes the combined reconstruction loss for both reconstructions."""
-        print(f"shapes for input {self.inputs.shape}, recon q {self.reconstruction_q.shape}, recon e {self.reconstruction_e.shape}")
-        #loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
+        loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.reconstruction_e)
-        #loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
-        loss_rec_mse = loss_rec_mse_ze
+        loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
         return loss_rec_mse
 
