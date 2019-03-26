@@ -333,7 +333,8 @@ class SOMVAE:
         """Computes the combined reconstruction loss for both reconstructions."""
         loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.reconstruction_e)
-        loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
+        #loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
+        loss_rec_mse = loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
         return loss_rec_mse
 

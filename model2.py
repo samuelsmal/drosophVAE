@@ -197,13 +197,18 @@ def ploting_frames(joint_positions):
 
 # <codecell>
 
-def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions):
+def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, validation_cut_off=None):
     for leg in LEGS:
         fig, axs = plt.subplots(1, NB_OF_AXIS * 2, sharex=True, figsize=(25, 10))
-        for tracked_point in range(NB_TRACKED_POINTS):
-            for axis in range(NB_OF_AXIS):
-                cur_ax = axs[axis * 2]
-                rec_ax = axs[axis * 2 + 1]
+        for axis in range(NB_OF_AXIS):
+            cur_ax = axs[axis * 2]
+            rec_ax = axs[axis * 2 + 1]
+            
+            if validation_cut_off is not None:
+                for a in [cur_ax, rec_ax]:
+                    a.axvline(validation_cut_off, label='validation cut off', linestyle='--')
+                    
+            for tracked_point in range(NB_TRACKED_POINTS):
                 cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
                 rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
                 cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
@@ -219,6 +224,7 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
                 rec_ax.set_xlabel('frame')
                 cur_ax.set_title('original data')
                 rec_ax.set_title('reconstructed data')
+                
 
                 
         #plt.xlabel('frame')
@@ -227,12 +233,15 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
 
 # <codecell>
 
-def plot_losses(losses):
+def plot_losses(losses, legend=None):
+    plt.figure(figsize=(15, 8))
+    if legend is None:
+        legend = ['train', 'test', 'test_recon'] 
     plt.figure()
     for l in losses:
         plt.plot(l)
 
-    plt.legend(['train', 'test', 'test_recon'])
+    plt.legend(legend)
     plt.xlabel('epoch')
     plt.title('loss')
 
@@ -658,13 +667,15 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
     test_losses, train_losses, test_losses_reconstruction = train_model(model, x, lr_val, generator=data_generator, **extract_args(config, train_model))
 
     result = evaluate_model(model, x, data=X_train, labels=y_train, **extract_args(config, evaluate_model))
+    result_val = evaluate_model(model, x, data=X_val, labels=y_val, **extract_args(config, evaluate_model))
+    
 
     if not save_model:
         shutil.rmtree(os.path.dirname(modelpath))
         
     print(f"got: {result[0]}")
 
-    return result, model, (train_losses, test_losses, test_losses_reconstruction)
+    return result, model, (train_losses, test_losses, test_losses_reconstruction), result_val
 
 # <markdowncell>
 
@@ -705,14 +716,14 @@ __ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0
 config = {
     "num_epochs": 200,
     "patience": 100,
-    "batch_size": len(joint_positions), # if time_series then each batch should be a time series
+    "batch_size": 50, # len(joint_positions), # if time_series then each batch should be a time series
     "latent_dim": __latent_dim__,
     "som_dim": __som_dim__,
     "learning_rate": 0.0005,
-    "alpha": 1.0,
-    "beta": 0.9,
-    "gamma": 1.8,
-    "tau": 1.4,
+    "alpha": 0.0, #1.0,
+    "beta": 0.0, #0.9,
+    "gamma": 0.0, #1.8,
+    "tau": 0.0, # 1.4,
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
@@ -721,7 +732,7 @@ config = {
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": True,
+    "time_series": False,
     "mnist": False,
 }
 
@@ -742,29 +753,31 @@ resh = joint_positions.reshape(-1, __NB_DIMS__ * 19)
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction
 scaler = MinMaxScaler()
-resh = scaler.fit_transform(resh)
+#resh = scaler.fit_transform(resh)
 
 # <codecell>
 
-nb_of_data_points = (resh.shape[0] // config['batch_size']) * config['batch_size']
-print(f"using {nb_of_data_points} entries as input")
-data_train = resh
+#nb_of_data_points = (resh.shape[0] // config['batch_size']) * config['batch_size']
+nb_of_data_points = int(resh.shape[0] * 0.7)
+
+data_train = scaler.fit_transform(resh[:nb_of_data_points])
+data_test = scaler.transform(resh[nb_of_data_points:])
 # just generating some labels, no clue what they are for except validation?
 labels_train = np.array(list(range(resh.shape[0])))
 
 data = {
-  "X_val": data_train[nb_of_data_points:],
+  "X_val": data_test,
   "y_val": labels_train[nb_of_data_points:],
-  "X_train": data_train[:nb_of_data_points],
+  "X_train": data_train,
   "y_train": labels_train[:nb_of_data_points]
 }
 
-data = {
-  "X_val": data_train,
-  "y_val": labels_train,
-  "X_train": data_train,
-  "y_train": labels_train
-}
+#data = {
+#  "X_val": data_train,
+#  "y_val": labels_train,
+#  "X_train": data_train,
+#  "y_train": labels_train
+#}
 
 # <markdowncell>
 
@@ -777,7 +790,10 @@ reload(somvae_model)
 tf.reset_default_graph()
 
 main_args = inspect.getfullargspec(main).args
-res, mdl, losses = main(**{**{k:config[k] for k in main_args if k in config}, **data, **{"config": config}})
+res, mdl, losses, res_val = main(**{**{k:config[k] for k in main_args if k in config}, **data, **{"config": config}})
+
+reconstructed_from_encoding =  scaler.inverse_transform(res[3]).reshape(-1, 19, 2)
+reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-1, 19, 2)
 
 # <codecell>
 
@@ -787,13 +803,32 @@ plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
-plot_comparing_joint_position_with_reconstructed(joint_positions, reconstructed_from_encoding.reshape(-1, 19, 2))
+reconstructed_from_encoding.shape
 
 # <codecell>
 
-# res[3] corresponds to the encoding reconstruction
-reconstructed_from_encoding = scaler.inverse_transform(np.array(res[3])).reshape(-1, 19, 2)
+reconstructed_from_encoding_val.shape
+
+
+# <codecell>
+
+nb_of_data_points
+
+# <codecell>
+
+plot_comparing_joint_position_with_reconstructed(joint_positions, np.vstack((reconstructed_from_encoding, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+
+# <codecell>
+
 ((joint_positions[:len(res[3])] - reconstructed_from_encoding) ** 2).mean()
+
+# <codecell>
+
+
+
+# <codecell>
+
+
 
 # <markdowncell>
 
@@ -812,24 +847,6 @@ reconstructed_from_encoding = scaler.inverse_transform(np.array(res[3])).reshape
 
 cluster_clips = create_gifs_for_clusters(res[2])
 full_clip = video_with_embedding(res[2])
-
-# <codecell>
-
-os.system('cp {0} {0}.png'.format(full_clip))
-display.Image(filename="{}.png".format(full_clip))
-
-# <codecell>
-
-from itertools import groupby
-sequences_grouped_by_embedding_id = {k: list(g) for k, g in groupby(sorted(enumerate(res[2]), key=lambda x: x[1]), key=lambda x: x[1])}
-
-# <codecell>
-
-[[frame_id for frame_id, _ in s] for _, s in sorted([(len(s), s) for s in sequences_grouped_by_embedding_id.values()], key=lambda x: x[0], reverse=True)]
-
-# <codecell>
-
-full_clip
 
 # <codecell>
 
