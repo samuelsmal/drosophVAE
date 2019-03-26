@@ -9,8 +9,6 @@
 
 __NB_DIMS__ = 2
 
-# <codecell>
-
 LEGS = [0, 1, 2, 5, 6, 7]
 LEGS = [0, 1, 2] #, 5, 6, 7] # since we do not care about the other side
 CAMERA_OF_INTEREST = 1
@@ -33,37 +31,57 @@ SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{
 
 # # imports & general functions
 
+# <markdowncell>
+
+# ## imports
+
 # <codecell>
 
 import numpy as np
-from importlib import reload
+import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
+import pandas as pd
 
+from sklearn.metrics import mean_squared_error
+from tqdm import tqdm, trange
 import pathlib
 import logging
 import datetime
-
-# <codecell>
-
 from datetime import date
-
+import os
+import uuid
+from glob import glob
+import shutil
+import pickle
 import skimage
 from functools import reduce
 from skimage import io
 import matplotlib.pyplot as plt
-import numpy as np
+import seaborn as sns
+
+# for creating the gifs
+import PIL
+import imageio
+import cv2
+from IPython import display
 
 #%matplotlib inline
 
-import numpy as np
-import tensorflow as tf
-import pandas as pd
-
-import pickle
+from importlib import reload
 import inspect
 import sys
 sys.path.append('/home/samuel/')
 
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
 from drosophpose.GUI import skeleton
+
+from som_vae import somvae_model
+from som_vae.utils import *
+
+# <markdowncell>
+
+# ## general helpers
 
 # <codecell>
 
@@ -80,7 +98,7 @@ fix_layout()
 
 # <markdowncell>
 
-# # data loading
+# ## data loading helpers
 
 # <codecell>
 
@@ -140,20 +158,9 @@ def add_third_dimension(joint_positions):
 
     return np.pad(joint_positions, paddings, mode='constant', constant_values=0)
 
-# <codecell>
+# <markdowncell>
 
-if __NB_DIMS__ == 3:
-    joint_positions = add_third_dimension(get_data())
-else:
-    joint_positions = add_third_dimension(get_data())
-    
-
-NB_FRAMES = joint_positions.shape[1]
-
-# <codecell>
-
-for leg in LEGS:
-    print("{0:.3}% of the data for leg {1} is 0".format((joint_positions[:, leg:leg+5, :2] == 0).mean(), leg))
+# ## plotting helpers
 
 # <codecell>
 
@@ -165,6 +172,10 @@ def _get_feature_id_(leg_id, tracking_point_id):
         return leg_id * 5 + tracking_point_id
     else:
         return (leg_id - 5) * 5 + tracking_point_id + 19
+    
+def _get_leg_name_(leg_id):
+    __LEG_NAMES__ = ['foreleg', 'middle leg', 'hind leg']
+    return __LEG_NAMES__[leg_id]
 
 def ploting_frames(joint_positions):
     for leg in LEGS:
@@ -182,7 +193,189 @@ def ploting_frames(joint_positions):
 
         #plt.xlabel('frame')
         #plt.legend(loc='lower right')
-        plt.suptitle('leg ' + str(leg))
+        plt.suptitle(_get_leg_name_(leg))
+
+# <codecell>
+
+def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions):
+    for leg in LEGS:
+        fig, axs = plt.subplots(1, NB_OF_AXIS * 2, sharex=True, figsize=(25, 10))
+        for tracked_point in range(NB_TRACKED_POINTS):
+            for axis in range(NB_OF_AXIS):
+                cur_ax = axs[axis * 2]
+                rec_ax = axs[axis * 2 + 1]
+                cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
+                rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
+                cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
+                if axis == 0:
+                    cur_ax.set_ylabel('x pos')
+                    rec_ax.set_ylabel('x pos')
+                else:
+                    cur_ax.set_ylabel('y pos')
+                    rec_ax.set_ylabel('y pos')
+                cur_ax.legend(loc='upper right')
+                cur_ax.set_xlabel('frame')
+                rec_ax.legend(loc='upper right')
+                rec_ax.set_xlabel('frame')
+                cur_ax.set_title('original data')
+                rec_ax.set_title('reconstructed data')
+
+                
+        #plt.xlabel('frame')
+        #plt.legend(loc='lower right')
+        plt.suptitle(_get_leg_name_(leg))
+
+# <codecell>
+
+def plot_losses(losses):
+    plt.figure()
+    for l in losses:
+        plt.plot(l)
+
+    plt.legend(['train', 'test', 'test_recon'])
+    plt.xlabel('epoch')
+    plt.title('loss')
+
+# <codecell>
+
+def plot_latent_frame_distribution(latent_assignments, nb_bins=__latent_dim__):
+    plt.figure()
+    plt.hist(latent_assignments, bins=__latent_dim__)
+    plt.title('distribution of latent-space-assignments')
+    plt.xlabel('latent-space')
+    plt.ylabel('nb of frames in latent-space')
+
+# <codecell>
+
+def plot_cluster_assignment_over_time(cluster_assignments):
+    plt.figure()
+    plt.plot(cluster_assignments)
+    plt.title("cluster assignments over time")
+    plt.ylabel("index of SOM-embeddings")
+    plt.xlabel("frame")
+
+# <markdowncell>
+
+# ## gif helpers
+
+# <codecell>
+
+def sequence_lengths(data):
+    sequences = []
+    cur_embedding_idx = 0
+    cur_seq = [0]
+    for i in range(len(data))[1:]:
+        if data[i] == data[cur_embedding_idx]:
+            cur_seq += [i]
+        else:
+            sequences += [cur_seq]
+            cur_embedding_idx = i
+            cur_seq = [i]
+            
+    sequences += [cur_seq]
+            
+    return sequences
+
+def get_frame_path(frame_id):
+    return POSE_FRAME_PATH.format(camera_id=CAMERA_OF_INTEREST, frame_id=frame_id)
+
+
+def create_gif_of_sequence(sequence, file_name=None):
+    if file_name is None:
+        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame=sequence[0], end_frame=sequence[-1])
+    else:
+        gif_file_path = file_name
+
+        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with imageio.get_writer(gif_file_path, mode='I') as writer:
+        filenames =  [(get_frame_path(i), i) for i in sequence]
+        last = -1
+        last_frame_id = filenames[0][1] - 1
+        for i, (filename, frame_id) in enumerate(filenames):
+            frame = 2*(i**0.5)
+            if round(frame) > round(last):
+                last = frame
+            else:
+                continue
+                
+            # adding fr nb to image
+            image = cv2.imread(filename)  
+            if last_frame_id + 1 != frame_id:
+                color = (0, 255, 255)
+            else:
+                color = (255, 255, 255)
+                
+            last_frame_id = frame_id
+                
+            image = cv2.putText(img=np.copy(image), text=str(frame_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=color, thickness=2)
+            #image = imageio.imread(filename)
+            writer.append_data(image)
+
+        image = imageio.imread(filename)
+        writer.append_data(image)
+    
+    return gif_file_path
+
+def video_with_embedding(embeddings, file_name=None):
+    if file_name is None:
+        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
+    else:
+        gif_file_path = file_name
+
+        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with imageio.get_writer(gif_file_path, mode='I') as writer:
+        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+        last = -1
+        for i, (filename, emb_id) in enumerate(filenames):
+            frame = 2*(i**0.5)
+            if round(frame) > round(last):
+                last = frame
+            else:
+                continue
+                
+            # adding fr nb to image
+            image = cv2.imread(filename)  
+            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+            writer.append_data(image)
+
+        image = imageio.imread(filename)
+        writer.append_data(image)
+    
+    return gif_file_path
+
+
+def create_gifs_for_clusters(cluster_assignments):
+    """
+    Args:
+        cluster_assignments: list of assignments for each frame
+    Returns:
+        file paths of the created gifs
+    """
+    sequences = sorted(sequence_lengths(res[2]), key=len, reverse=True)
+
+    return [create_gif_of_sequence(s) for s in sequences[:10]]
+
+# <markdowncell>
+
+# # data loading
+
+# <codecell>
+
+if __NB_DIMS__ == 3:
+    joint_positions = add_third_dimension(get_data())
+else:
+    joint_positions = add_third_dimension(get_data())
+    
+
+NB_FRAMES = joint_positions.shape[1]
+
+# <codecell>
+
+for leg in LEGS:
+    print("{0:.3}% of the data for leg {1} is 0".format((joint_positions[:, leg:leg+5, :2] == 0).mean(), leg))
 
 # <codecell>
 
@@ -235,34 +428,11 @@ ploting_frames(joint_positions)
 
 # <markdowncell>
 
-# # train
+# # SOM-VAE model
 
 # <markdowncell>
 
 # ## functions
-
-# <codecell>
-
-import os
-import uuid
-import shutil
-from glob import glob
-from datetime import date
-
-import numpy as np
-import tensorflow as tf
-from tensorflow.examples.tutorials.mnist import input_data
-import pandas as pd
-from sklearn.metrics import mean_squared_error
-from tqdm import tqdm, trange
-
-from som_vae import somvae_model
-from som_vae.utils import *
-
-from importlib import reload
-reload(somvae_model)
-
-import inspect
 
 # <codecell>
 
@@ -349,6 +519,7 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
         patience_count = 0
         train_losses = []
         test_losses = []
+        test_losses_reconstrution = []
         train_writer = tf.summary.FileWriter(logdir+"/train", sess.graph)
         test_writer = tf.summary.FileWriter(logdir+"/test", sess.graph)
         print("Training...")
@@ -358,8 +529,9 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
                 pbar = tqdm(total=num_epochs*(num_batches)) 
             for epoch in range(num_epochs):
                 batch_val = next(val_gen)
-                test_loss, summary = sess.run([model.loss, summaries], feed_dict={x: batch_val})
+                test_loss, summary, test_loss_reconstruction = sess.run([model.loss, summaries, model.loss_reconstruction], feed_dict={x: batch_val})
                 test_losses.append(test_loss)
+                test_losses_reconstrution.append(test_loss_reconstruction)
                 test_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
                 if test_losses[-1] == min(test_losses):
                     saver.save(sess, modelpath, global_step=epoch)
@@ -387,7 +559,7 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
             if interactive:
                 pbar.close()
                 
-    return test_losses, train_losses
+    return test_losses, train_losses, test_losses_reconstrution
 
 # <codecell>
 
@@ -483,7 +655,7 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
             input_length=input_length, input_channels=input_channels, alpha=alpha, beta=beta, gamma=gamma,
             tau=tau, mnist=mnist)
 
-    test_losses, train_losses = train_model(model, x, lr_val, generator=data_generator, **extract_args(config, train_model))
+    test_losses, train_losses, test_losses_reconstruction = train_model(model, x, lr_val, generator=data_generator, **extract_args(config, train_model))
 
     result = evaluate_model(model, x, data=X_train, labels=y_train, **extract_args(config, evaluate_model))
 
@@ -492,8 +664,7 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
         
     print(f"got: {result[0]}")
 
-    return result, model, (train_losses, test_losses)
-
+    return result, model, (train_losses, test_losses, test_losses_reconstruction)
 
 # <markdowncell>
 
@@ -526,7 +697,7 @@ Params:
         MNIST time series.
     mnist (bool): Indicator if the model is trained on MNIST-like data.
 """
-__name__ = "without_sacred"
+__name__ = "tryouts"
 __latent_dim__ = 64
 __som_dim__ = [8,8]
 __ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0], __som_dim__[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), uuid.uuid4().hex[:5])
@@ -554,6 +725,10 @@ config = {
     "mnist": False,
 }
 
+# <codecell>
+
+# creating path to store model
+pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 # <markdowncell>
 
@@ -561,39 +736,18 @@ config = {
 
 # <codecell>
 
-# tensorflow data layout
-# (x, y, channels)
-joint_positions = joint_positions[:,:,:__NB_DIMS__]
-
-# option 1
-resh = joint_positions.reshape(-1, 19, __NB_DIMS__, 1)
-
-# option 2
-#resh = joint_positions.reshape(-1, 19, 1, __NB_DIMS__)
-
-# option 3, flat
+# reshaping the data
 resh = joint_positions.reshape(-1, __NB_DIMS__ * 19)
 
-# <codecell>
-
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-
-# <codecell>
-
-#scaler = StandardScaler()
+# scaling the data to be in [0, 1]
+# this is due to the sigmoid activation function in the reconstruction
 scaler = MinMaxScaler()
 resh = scaler.fit_transform(resh)
 
 # <codecell>
 
-## mnist
-#mnist = input_data.read_data_sets(f"../data/{ex_config()['data_set']}")
-#nb_of_data_points = 45000
-#data_train = np.reshape(mnist.train.images, [-1,28,28,1])
-#labels_train = mnist.train.labels
-
-## fly data
 nb_of_data_points = (resh.shape[0] // config['batch_size']) * config['batch_size']
+print(f"using {nb_of_data_points} entries as input")
 data_train = resh
 # just generating some labels, no clue what they are for except validation?
 labels_train = np.array(list(range(resh.shape[0])))
@@ -612,11 +766,6 @@ data = {
   "y_train": labels_train
 }
 
-# <codecell>
-
-# creating path to store model
-pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
-
 # <markdowncell>
 
 # ## running fit & test
@@ -625,12 +774,6 @@ pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 reload(somvae_model)
 
-# <codecell>
-
-#tf.logging.set_verbosity(tf.logging.INFO)
-
-# <codecell>
-
 tf.reset_default_graph()
 
 main_args = inspect.getfullargspec(main).args
@@ -638,18 +781,13 @@ res, mdl, losses = main(**{**{k:config[k] for k in main_args if k in config}, **
 
 # <codecell>
 
-res[0]
+plot_losses(losses)
+plot_latent_frame_distribution(res[2])
+plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
-import seaborn as sns
-
-for l in losses:
-    plt.plot(l)
-    
-plt.legend(['train', 'test'])
-plt.xlabel('epoch')
-plt.title('loss')
+plot_comparing_joint_position_with_reconstructed(joint_positions, reconstructed_from_encoding.reshape(-1, 19, 2))
 
 # <codecell>
 
@@ -657,144 +795,28 @@ plt.title('loss')
 reconstructed_from_encoding = scaler.inverse_transform(np.array(res[3])).reshape(-1, 19, 2)
 ((joint_positions[:len(res[3])] - reconstructed_from_encoding) ** 2).mean()
 
-# <codecell>
+# <markdowncell>
 
-plt.hist(res[2])
+# ## cool gifs
 
-# <codecell>
+# <markdowncell>
 
-ploting_frames(reconstructed_from_encoding.reshape(-1, 19, 2))
-
-# <codecell>
-
-ploting_frames(joint_positions)
-
-# <codecell>
-
-plt.plot(res[2])
-plt.title("index of SOM-embeddings")
-plt.xlabel("frame")
+# ```
+# # use this to display a gif inside the notebook, no idea why a function doesn't work
+# # this is a hack to display the gif inside the notebook
+# os.system('cp {0} {0}.png'.format(path))
+# display.Image(filename=f"{path}.png")
+# ``` 
 
 # <codecell>
 
-def sequence_lengths(data):
-    sequences = []
-    cur_embedding_idx = 0
-    cur_seq = [0]
-    for i in range(len(data))[1:]:
-        if data[i] == data[cur_embedding_idx]:
-            cur_seq += [i]
-        else:
-            sequences += [cur_seq]
-            cur_embedding_idx = i
-            cur_seq = [i]
-            
-    sequences += [cur_seq]
-            
-    return sequences
-
-# <codecell>
-
-sequences = sorted(sequence_lengths(res[2]), key=len, reverse=True)
-
-# <codecell>
-
-import matplotlib.pyplot as plt
-import PIL
-import imageio
-import cv2
-from IPython import display
-
-# <codecell>
-
-def get_frame_path(frame_id):
-    return POSE_FRAME_PATH.format(camera_id=CAMERA_OF_INTEREST, frame_id=frame_id)
-
-
-def create_gif_of_sequence(sequence, file_name=None):
-    if file_name is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame=sequence[0], end_frame=sequence[-1])
-    else:
-        gif_file_path = file_name
-
-        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), i) for i in sequence]
-        last = -1
-        last_frame_id = filenames[0][1] - 1
-        for i, (filename, frame_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            # adding fr nb to image
-            image = cv2.imread(filename)  
-            if last_frame_id + 1 != frame_id:
-                color = (0, 255, 255)
-            else:
-                color = (255, 255, 255)
-                
-            last_frame_id = frame_id
-                
-            image = cv2.putText(img=np.copy(image), text=str(frame_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=color, thickness=2)
-            #image = imageio.imread(filename)
-            writer.append_data(image)
-
-        image = imageio.imread(filename)
-        writer.append_data(image)
-    
-    return gif_file_path
-
-# <codecell>
-
-def video_with_embedding(embeddings, file_name=None):
-    if file_name is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
-    else:
-        gif_file_path = file_name
-
-        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-        last = -1
-        for i, (filename, emb_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            # adding fr nb to image
-            image = cv2.imread(filename)  
-            image = cv2.putText(img=np.copy(image), text=str(emb_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-            image = cv2.putText(img=np.copy(image), text=f"fr : {i}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-            writer.append_data(image)
-
-        image = imageio.imread(filename)
-        writer.append_data(image)
-    
-    return gif_file_path
-
-# <codecell>
-
-gif_file_paths = [create_gif_of_sequence(s) for s in sequences[:10]]
-
-# <codecell>
-
+cluster_clips = create_gifs_for_clusters(res[2])
 full_clip = video_with_embedding(res[2])
 
 # <codecell>
 
 os.system('cp {0} {0}.png'.format(full_clip))
 display.Image(filename="{}.png".format(full_clip))
-
-# <codecell>
-
-
 
 # <codecell>
 
@@ -807,16 +829,18 @@ sequences_grouped_by_embedding_id = {k: list(g) for k, g in groupby(sorted(enume
 
 # <codecell>
 
-def display_gif(path):
-    # this is a hack to display the gif inside the notebook
-    os.system('cp {0} {0}.png'.format(path))
-    display.Image(filename=f"{path}.png")
+full_clip
+
+# <codecell>
+
+os.system('cp {0} {0}.png'.format(full_clip))
+display.Image(filename="{}.png".format(full_clip))
 
 # <codecell>
 
 idx = 0
-os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]))
+os.system('cp {0} {0}.png'.format(cluster_clips[idx]))
+display.Image(filename="{}.png".format(cluster_clips[idx]))
 
 
 # <codecell>
