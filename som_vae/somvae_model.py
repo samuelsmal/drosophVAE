@@ -136,7 +136,6 @@ class SOMVAE:
         self.decay_steps = decay_steps
         self.input_length = input_length
         self.input_channels = input_channels
-        print(f"input channels (init): {self.input_channels}")
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
@@ -201,7 +200,6 @@ class SOMVAE:
     @lazy_scope
     def z_e(self):
         """Computes the latent encodings of the inputs."""
-        print(f"latent dims {self.latent_dim}, is mnist {self.mnist}")
         if self.mnist:
             with tf.variable_scope("encoder"):
                 h_conv1 = tf.nn.relu(conv2d(self.inputs, [4,4,1,256], "conv1"))
@@ -214,11 +212,8 @@ class SOMVAE:
         else:
             with tf.variable_scope("encoder"):
                 h_1 = tf.keras.layers.Dense(256, activation="relu")(self.inputs)
-                print(f"shape of h1 {h_1.shape}")
                 h_2 = tf.keras.layers.Dense(128, activation="relu")(h_1)
-                print(f"shape of h2 {h_2.shape}")
                 _z_e = tf.keras.layers.Dense(self.latent_dim, activation="relu")(h_2)
-        print(f"dims of ze {_z_e.shape}")
         return _z_e
 
 
@@ -232,8 +227,6 @@ class SOMVAE:
     @lazy_scope
     def z_dist_flat(self):
         """Computes the distances between the encodings and the embeddings."""
-        print(f"shape of z_e {self.z_e.shape}")
-        print(f"shape of embeddings {self.embeddings.shape}")
         z_dist = tf.squared_difference(tf.expand_dims(tf.expand_dims(self.z_e, 1), 1), tf.expand_dims(self.embeddings, 0))
         z_dist_red = tf.reduce_sum(z_dist, axis=-1)
         z_dist_flat = tf.reshape(z_dist_red, [self.batch_size, -1])
@@ -254,7 +247,6 @@ class SOMVAE:
         k_1 = self.k // self.som_dim[1]
         k_2 = self.k % self.som_dim[1]
         k_stacked = tf.stack([k_1, k_2], axis=1)
-        print(f"indices (z_q): {k_stacked}")
         z_q = tf.gather_nd(self.embeddings, k_stacked)
         return z_q
 
@@ -304,11 +296,8 @@ class SOMVAE:
                 x_hat = h_deconv2
         else:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                print(f"shape of z_q (recon q): {self.z_q.shape}")
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_q)
-                print(f"shape of h3 (recon q): {h_3.shape}")
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                # TODO rename input_channels
                 # old version based on normalised data
                 #x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
                 x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
