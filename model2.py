@@ -472,7 +472,7 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
     #x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
     input_length = 1
     input_channels = 19 * __NB_DIMS__
-    x = tf.placeholder(tf.float32, shape=[None, 1, 1, input_channels])
+    x = tf.placeholder(tf.float32, shape=[None, input_channels])
     #x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1])
     #x = tf.placeholder(tf.float32, shape=[None, input_length, 1, input_channels])
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
@@ -534,14 +534,14 @@ __ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0
 config = {
     "num_epochs": 200,
     "patience": 100,
-    "batch_size": 32,
+    "batch_size": len(joint_positions), # if time_series then each batch should be a time series
     "latent_dim": __latent_dim__,
     "som_dim": __som_dim__,
     "learning_rate": 0.0005,
-    "alpha": 0, # 1.0,
-    "beta": 0, # 0.9,
-    "gamma": 0, # 1.8,
-    "tau": 0, # 1.4,
+    "alpha": 1.0,
+    "beta": 0.9,
+    "gamma": 1.8,
+    "tau": 1.4,
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
@@ -550,7 +550,7 @@ config = {
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": False,
+    "time_series": True,
     "mnist": False,
 }
 
@@ -572,7 +572,17 @@ resh = joint_positions.reshape(-1, 19, __NB_DIMS__, 1)
 #resh = joint_positions.reshape(-1, 19, 1, __NB_DIMS__)
 
 # option 3, flat
-resh = joint_positions.reshape(-1, 1, 1, __NB_DIMS__ * 19)
+resh = joint_positions.reshape(-1, __NB_DIMS__ * 19)
+
+# <codecell>
+
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+# <codecell>
+
+#scaler = StandardScaler()
+scaler = MinMaxScaler()
+resh = scaler.fit_transform(resh)
 
 # <codecell>
 
@@ -638,12 +648,14 @@ for l in losses:
     plt.plot(l)
     
 plt.legend(['train', 'test'])
+plt.xlabel('epoch')
 plt.title('loss')
 
 # <codecell>
 
 # res[3] corresponds to the encoding reconstruction
-((data['X_train'] - np.array(res[3])) ** 2).mean()
+reconstructed_from_encoding = scaler.inverse_transform(np.array(res[3])).reshape(-1, 19, 2)
+((joint_positions[:len(res[3])] - reconstructed_from_encoding) ** 2).mean()
 
 # <codecell>
 
@@ -651,7 +663,7 @@ plt.hist(res[2])
 
 # <codecell>
 
-ploting_frames(add_third_dimension(np.array(res[3]).reshape(-1, 19, 2)))
+ploting_frames(reconstructed_from_encoding.reshape(-1, 19, 2))
 
 # <codecell>
 
@@ -791,10 +803,6 @@ sequences_grouped_by_embedding_id = {k: list(g) for k, g in groupby(sorted(enume
 
 # <codecell>
 
-res[2]
-
-# <codecell>
-
 [[frame_id for frame_id, _ in s] for _, s in sorted([(len(s), s) for s in sequences_grouped_by_embedding_id.values()], key=lambda x: x[0], reverse=True)]
 
 # <codecell>
@@ -821,7 +829,7 @@ display.Image(filename="{}.png".format(gif_file_paths[idx]))
 
 idx = 2
 os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]));
+display.Image(filename="{}.png".format(gif_file_paths[idx]))
 
 # <codecell>
 
