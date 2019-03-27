@@ -380,6 +380,164 @@ def create_gifs_for_clusters(cluster_assignments, up_to_n_clusters=10):
 
     return [create_gif_of_sequence(s) for s in sequences[:up_to_n_clusters]]
 
+# <codecell>
+
+import matplotlib.colors as mc
+import colorsys
+
+
+def lighten_color(color, amount=0.5):
+    """
+    Lightens the given color by multiplying (1-luminosity) by the given amount.
+    Input can be matplotlib color string, hex string, or RGB tuple.
+    
+    Taken from here: https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib#answer-49601444
+
+    Examples:
+    >> lighten_color('g', 0.3)
+    >> lighten_color('#F034A3', 0.6)
+    >> lighten_color((.3,.55,.1), 0.5)
+    """
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+
+def lighten_int_colors(cs, amount=0.5):
+    return [(np.array(lighten_color(np.array(c) / 255, amount=amount)) * 255).astype(np.int).tolist() for c in cs]
+
+# taken from https://github.com/NeLy-EPFL/drosoph3D/blob/master/GUI/plot_util.py
+def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickness=None,
+                       draw_limbs=None, circle_color=None):
+    if colors is None:
+        colors = skeleton.colors
+    if thickness is None:
+        thickness = [2] * 10
+    if draw_joints is None:
+        draw_joints = np.arange(skeleton.num_joints)
+    if draw_limbs is None:
+        draw_limbs = np.arange(skeleton.num_limbs)
+    for joint_id in range(pts.shape[0]):
+        limb_id = skeleton.get_limb_id(joint_id)
+        if (pts[joint_id, 0] == 0 and pts[joint_id, 1] == 0) or limb_id not in draw_limbs or joint_id not in draw_joints:
+            continue
+
+        color = colors[limb_id]
+        r = 5 if joint_id != skeleton.num_joints - 1 and joint_id != ((skeleton.num_joints // 2) - 1) else 8
+        cv2.circle(img, (pts[joint_id, 0], pts[joint_id, 1]), r, color, -1)
+
+        # TODO replace this with skeleton.bones
+        if (not skeleton.is_tarsus_tip(joint_id)) and (not skeleton.is_antenna(
+                joint_id)) and (joint_id != skeleton.num_joints - 1) and (
+                joint_id != (skeleton.num_joints // 2 - 1)) and (not (
+                pts[joint_id + 1, 0] == 0 and pts[joint_id + 1, 1] == 0)):
+            cv2.line(img, (pts[joint_id][0], pts[joint_id][1]), (pts[joint_id + 1][0], pts[joint_id + 1][1]),
+                     color=color,
+                     thickness=thickness[limb_id])
+
+    if circle_color is not None:
+        img = cv2.circle(img=img, center=(img.shape[1]-20, 20), radius=10, color=circle_color, thickness=-1)
+
+    return img
+
+# <codecell>
+
+def gif_with_x(x, embeddings, file_path=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+    
+    Args:
+        embeddings: [<embeddings_id>]    
+            assumed to be in sequence with `get_frame_path` function.
+        file_path: <str>, default: SEQUENCE_GIF_PATH  
+            file path used to get 
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    if file_path is None:
+        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
+    else:
+        gif_file_path = file_path
+
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with imageio.get_writer(gif_file_path, mode='I') as writer:
+        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+        last = -1
+        for i, (filename, emb_id) in enumerate(filenames):
+            frame = 2*(i**0.5)
+            if round(frame) > round(last):
+                last = frame
+            else:
+                continue
+                
+            image = cv2.imread(filename)  
+            
+            
+            # adding 
+            image = plot_drosophila_2d(x[i].astype(np.int), img=image)
+                
+            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
+            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+            writer.append_data(image)
+
+        image = imageio.imread(filename)
+        writer.append_data(image)
+    
+    return gif_file_path
+
+
+def gif_with_xs(xs, embeddings, file_path=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+    
+    Args:
+        xs: [<pos data: [frames, limb, dimensions]>]
+            will plot all of them, the colors get lighter
+        embeddings: [<embeddings_id>]    
+            assumed to be in sequence with `get_frame_path` function.
+        file_path: <str>, default: SEQUENCE_GIF_PATH  
+            file path used to get 
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    if file_path is None:
+        # arguments for the path are missused, just FYI
+        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video-x_x-hat", end_frame="with-embeddings")
+    else:
+        gif_file_path = file_path
+
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with imageio.get_writer(gif_file_path, mode='I') as writer:
+        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+        last = -1
+        for i, (filename, emb_id) in enumerate(filenames):
+            frame = 2*(i**0.5)
+            if round(frame) > round(last):
+                last = frame
+            else:
+                continue
+                
+            image = cv2.imread(filename)  
+            
+            
+            # adding 
+            for x_i, x in enumerate(xs):
+                image = plot_drosophila_2d(x[i].astype(np.int), img=image, colors=lighten_int_colors(skeleton.colors, amount=np.linspace(0, 0.5, len(xs))[x_i]))
+                
+            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
+            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+            writer.append_data(image)
+
+        image = imageio.imread(filename)
+        writer.append_data(image)
+    
+    return gif_file_path
+
 # <markdowncell>
 
 # # data loading
@@ -408,7 +566,8 @@ ploting_frames(joint_positions)
 def normalize(joint_positions, using_median=True, to_probability_distr=False):
     # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
     if using_median:
-        return joint_positions - np.median(joint_positions.reshape(-1, 3), axis=0)
+        applied = np.median(joint_positions.reshape(-1, 3), axis=0)
+        return joint_positions - applied, applied
     elif to_probability_distr:
         return
     else:
@@ -442,7 +601,8 @@ def normalize_pose(points3d, median3d=False):
 
 # <codecell>
 
-joint_positions = normalize(joint_positions)
+joint_positions_raw = joint_positions.copy()
+joint_positions, joint_norm_factor = normalize(joint_positions)
 
 # <codecell>
 
@@ -738,10 +898,14 @@ config = {
     "latent_dim": __latent_dim__,
     "som_dim": __som_dim__,
     "learning_rate": 0.0005,
-    "alpha": 0.0, #1.0,
-    "beta": 0.0, #0.9,
-    "gamma": 0.0, #1.8,
-    "tau": 0.0, # 1.4,
+    #"alpha": 0.0, #1.0,
+    #"beta": 0.0, #0.9,
+    #"gamma": 0.0, #1.8,
+    #"tau": 0.0, # 1.4,
+    "alpha": 1.0,
+    "beta": 0.9,
+    "gamma": 1.8,
+    "tau": 1.4,
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
@@ -820,6 +984,7 @@ res, mdl, losses, res_val = main(**{**{k:config[k] for k in main_args if k in co
 
 reconstructed_from_encoding =  scaler.inverse_transform(res[3]).reshape(-1, 19, 2)
 reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-1, 19, 2)
+reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
 
 # <codecell>
 
@@ -859,57 +1024,28 @@ plot_comparing_joint_position_with_reconstructed(joint_positions,
 
 # <codecell>
 
-def gif_with_x(x, embeddings, file_path=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-    
-    Args:
-        embeddings: [<embeddings_id>]    
-            assumed to be in sequence with `get_frame_path` function.
-        file_path: <str>, default: SEQUENCE_GIF_PATH  
-            file path used to get 
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    if file_path is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
+def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor, to_2d=True):
+    # TODO add reshaping and other steps here as well
+    _x = add_third_dimension(reconstructed_from_encoding) + normalisation_term 
+    if to_2d:
+        return _x[:,:,:2]
     else:
-        gif_file_path = file_path
-
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-        last = -1
-        for i, (filename, emb_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            image = cv2.imread(filename)  
-            
-            for p in x[i]:
-                cv2.circle(image, tuple(p.astype('int').tolist()), radius=3, thickness=-1, color=(0,255,0)) 
-                
-            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
-            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-            writer.append_data(image)
-
-        image = imageio.imread(filename)
-        writer.append_data(image)
-    
-    return gif_file_path
+        return _x
 
 # <codecell>
 
+# change to 
+_p = gif_with_xs((joint_positions_raw[:,:,:2], reverse_pos_pipeline(reconstructed_from_encoding), reverse_pos_pipeline(reconstructed_from_embedding)), embeddings=res[2])
 
+os.system('cp {0} {0}.png'.format(_p))
+display.Image(filename="{}.png".format(_p))
 
 # <codecell>
 
 x = reconstructed_from_encoding
+x = (add_third_dimension(reconstructed_from_encoding) + joint_norm_factor)[:,:,:2] 
 i = 10
+
 image = cv2.imread(get_frame_path(i))  
 
 for p in x[i]:
@@ -918,14 +1054,6 @@ for p in x[i]:
 # <codecell>
 
 plt.imshow(image)
-
-# <codecell>
-
-# change to 
-_p = gif_with_x(x=reconstructed_from_encoding, embeddings=res[2])
-
-os.system('cp {0} {0}.png'.format(_p))
-display.Image(filename="{}.png".format(_p))
 
 # <codecell>
 
@@ -946,18 +1074,10 @@ display.Image(filename="{}.png".format(cluster_clips[idx]))
 
 # <codecell>
 
-idx = 1
-os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]))
-
-# <codecell>
-
 idx = 2
-os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]))
+os.system('cp {0} {0}.png'.format(cluster_clips[idx]))
+display.Image(filename="{}.png".format(cluster_clips[idx]))
 
 # <codecell>
 
-idx = 3
-os.system('cp {0} {0}.png'.format(gif_file_paths[idx]))
-display.Image(filename="{}.png".format(gif_file_paths[idx]));
+
