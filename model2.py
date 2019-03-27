@@ -780,14 +780,15 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
         x_hat_embedding = []
         x_hat_encoding = []
         test_mse_all = []
+        x_hat_latent = []
         print("Evaluation...")
         for i in range(num_batches):
             batch_data = data[i*batch_size:(i+1)*batch_size]
-            _k, x_embedding, x_encoding = sess.run([model.k, model.x_hat_embedding, model.x_hat_encoding], feed_dict={x: batch_data})
+            _k, x_embedding, x_encoding, x_latent = sess.run([model.k, model.x_hat_embedding, model.x_hat_encoding, model.z_e], feed_dict={x: batch_data})
             k_all.extend(_k)
             x_hat_embedding.extend(x_embedding)
             x_hat_encoding.extend(x_encoding)
-            
+            x_hat_latent.extend(x_latent)
             
             # is it encoding or embedding?
             test_mse_all.append(mean_squared_error(x_encoding.flatten(), batch_data.flatten()))
@@ -802,7 +803,11 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
     results["MSE"] = test_mse
 #    results["optimization_target"] = 1 - test_nmi
 
-    return results, x_hat_embedding, k_all, x_hat_encoding
+    return results, x_hat_embedding, k_all, x_hat_encoding, x_hat_latent
+
+# <codecell>
+
+config
 
 # <codecell>
 
@@ -825,15 +830,15 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
         dict: Results of the evaluation (NMI, Purity, MSE).
     """
     print(f"running with config: {config}")
-    # Dimensions for MNIST-like data
-    #input_length = 28
-    #input_channels = 28
-    #x = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
-    input_length = 1
-    input_channels = 19 * __NB_DIMS__
-    x = tf.placeholder(tf.float32, shape=[None, input_channels])
-    #x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1])
-    #x = tf.placeholder(tf.float32, shape=[None, input_length, 1, input_channels])
+    if config['mnist']:
+        x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
+        input_length = __NB_DIMS__
+        input_channels = 19
+    else:
+        x = tf.placeholder(tf.float32, shape=[None, input_channels])
+        input_length = 1
+        input_channels = 19 * __NB_DIMS__
+        
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
 
     lr_val = tf.placeholder_with_default(learning_rate, [])
@@ -891,6 +896,8 @@ __latent_dim__ = 64
 __som_dim__ = [8,8]
 __ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0], __som_dim__[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), uuid.uuid4().hex[:5])
 
+# TODO add hash of config to modelpath
+
 config = {
     "num_epochs": 200,
     "patience": 100,
@@ -916,6 +923,8 @@ config = {
     "save_model": False,
     "time_series": False,
     "mnist": False,
+    "loss_weight_encoding": 1.0,
+    "loss_weight_embedding": 1.0
 }
 
 # <codecell>
@@ -936,14 +945,6 @@ reshaped_joint_position = joint_positions[:,:,:__NB_DIMS__].reshape(-1, 19 * __N
 # this is due to the sigmoid activation function in the reconstruction
 scaler = MinMaxScaler()
 #resh = scaler.fit_transform(resh)
-
-# <codecell>
-
-joint_positions.shape
-
-# <codecell>
-
-data_test.shape
 
 # <codecell>
 
@@ -985,6 +986,12 @@ res, mdl, losses, res_val = main(**{**{k:config[k] for k in main_args if k in co
 reconstructed_from_encoding =  scaler.inverse_transform(res[3]).reshape(-1, 19, 2)
 reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-1, 19, 2)
 reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
+reconstructed_from_embedding_val = scaler.inverse_transform(res_val[1]).reshape(-1, 19, 2)
+
+# <codecell>
+
+reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
+reconstructed_from_embedding_val = scaler.inverse_transform(res_val[1]).reshape(-1, 19, 2)
 
 # <codecell>
 
@@ -999,11 +1006,16 @@ plot_comparing_joint_position_with_reconstructed(joint_positions,
 
 # <codecell>
 
+plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                 np.vstack((reconstructed_from_embedding, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
+
+# <codecell>
+
 ((joint_positions[:len(res[3])] - reconstructed_from_encoding) ** 2).mean()
 
 # <codecell>
 
-
+stop
 
 # <codecell>
 
@@ -1039,21 +1051,6 @@ _p = gif_with_xs((joint_positions_raw[:,:,:2], reverse_pos_pipeline(reconstructe
 
 os.system('cp {0} {0}.png'.format(_p))
 display.Image(filename="{}.png".format(_p))
-
-# <codecell>
-
-x = reconstructed_from_encoding
-x = (add_third_dimension(reconstructed_from_encoding) + joint_norm_factor)[:,:,:2] 
-i = 10
-
-image = cv2.imread(get_frame_path(i))  
-
-for p in x[i]:
-    cv2.circle(image, tuple((p + np.array()).astype('int').tolist()), radius=3, thickness=-1, color=(0,255,0)) 
-
-# <codecell>
-
-plt.imshow(image)
 
 # <codecell>
 
