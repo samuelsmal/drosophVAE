@@ -144,14 +144,13 @@ def _get_visible_legs_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
 # <codecell>
 
 def get_data(path=POSE_DATA_PATH):
-    return reduce(lambda acc, el: el(acc), 
-                  [_get_camera_of_interest_, _get_visible_legs_],
-                  _simple_checks_(load_data(path)))
+    return reduce(lambda acc, el: el(acc), [load_data, _simple_checks_, _get_camera_of_interest_, _get_visible_legs_], path)
 
 # <codecell>
 
 def add_third_dimension(joint_positions):
     # just add a z-axis
+    # look up np.pad...
     # assumes that the positional data is in the last axis
     paddings = [[0, 0] for i in joint_positions.shape]
     paddings[-1][1] = 1
@@ -247,9 +246,9 @@ def plot_losses(losses, legend=None):
 
 # <codecell>
 
-def plot_latent_frame_distribution(latent_assignments, nb_bins=__latent_dim__):
+def plot_latent_frame_distribution(latent_assignments, nb_bins):
     plt.figure()
-    plt.hist(latent_assignments, bins=__latent_dim__)
+    plt.hist(latent_assignments, bins=nb_bins)
     plt.title('distribution of latent-space-assignments')
     plt.xlabel('latent-space')
     plt.ylabel('nb of frames in latent-space')
@@ -269,7 +268,11 @@ def plot_cluster_assignment_over_time(cluster_assignments):
 
 # <codecell>
 
-def sequence_lengths(data):
+def group_by_cluster(data):
+    """Returns the lengths of sequences.
+    Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
+    
+    """
     sequences = []
     cur_embedding_idx = 0
     cur_seq = [0]
@@ -285,8 +288,8 @@ def sequence_lengths(data):
             
     return sequences
 
-def get_frame_path(frame_id):
-    return POSE_FRAME_PATH.format(camera_id=CAMERA_OF_INTEREST, frame_id=frame_id)
+def get_frame_path(frame_id, path=POSE_FRAME_PATH, camera_id=CAMERA_OF_INTEREST):
+    return path.format(camera_id=camera_id, frame_id=frame_id)
 
 
 def create_gif_of_sequence(sequence, file_name=None):
@@ -295,7 +298,7 @@ def create_gif_of_sequence(sequence, file_name=None):
     else:
         gif_file_path = file_name
 
-        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
     
     with imageio.get_writer(gif_file_path, mode='I') as writer:
         filenames =  [(get_frame_path(i), i) for i in sequence]
@@ -326,13 +329,23 @@ def create_gif_of_sequence(sequence, file_name=None):
     
     return gif_file_path
 
-def video_with_embedding(embeddings, file_name=None):
-    if file_name is None:
+def video_with_embedding(embeddings, file_path=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+    
+    Args:
+        embeddings: [<embeddings_id>]    
+            assumed to be in sequence with `get_frame_path` function.
+        file_path: <str>, default: SEQUENCE_GIF_PATH  
+            file path used to get 
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    if file_path is None:
         gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
     else:
-        gif_file_path = file_name
+        gif_file_path = file_path
 
-        pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
     
     with imageio.get_writer(gif_file_path, mode='I') as writer:
         filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
@@ -356,16 +369,16 @@ def video_with_embedding(embeddings, file_name=None):
     return gif_file_path
 
 
-def create_gifs_for_clusters(cluster_assignments):
+def create_gifs_for_clusters(cluster_assignments, up_to_n_clusters=10):
     """
     Args:
         cluster_assignments: list of assignments for each frame
     Returns:
         file paths of the created gifs
     """
-    sequences = sorted(sequence_lengths(res[2]), key=len, reverse=True)
+    sequences = sorted(group_by_cluster(cluster_assignments), key=len, reverse=True)
 
-    return [create_gif_of_sequence(s) for s in sequences[:10]]
+    return [create_gif_of_sequence(s) for s in sequences[:up_to_n_clusters]]
 
 # <markdowncell>
 
@@ -584,14 +597,16 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
         
     Returns:
         dict: Dictionary of evaluation results (NMI, Purity, MSE).
-        x_hat
-        k
+        x hat, reconstructed data
+        cluster assignments for each row
+        encoding of x
     """
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     
     
     num_batches = len(data)//batch_size
     
+    # TODO this belongs into the global config handling
     session_config = tf.ConfigProto()
     session_config.gpu_options.allow_growth = True 
     session_config.gpu_options.polling_inactive_delay_msecs = 10
@@ -601,21 +616,24 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, modelpath)
 
-        test_k_all = []
-        test_rec_all = []
-        test_rec_encoding = []
+        k_all = []
+        x_hat_embedding = []
+        x_hat_encoding = []
         test_mse_all = []
         print("Evaluation...")
         for i in range(num_batches):
             batch_data = data[i*batch_size:(i+1)*batch_size]
-            test_k_all.extend(sess.run(model.k, feed_dict={x: batch_data}))
-            test_rec = sess.run(model.reconstruction_q, feed_dict={x: batch_data})
-            _t = sess.run(model.reconstruction_e, feed_dict={x: batch_data})
-            test_rec_encoding.extend(_t)
-            test_mse_all.append(mean_squared_error(test_rec.flatten(), batch_data.flatten()))
+            _k, x_embedding, x_encoding = sess.run([model.k, model.x_hat_embedding, model.x_hat_encoding], feed_dict={x: batch_data})
+            k_all.extend(_k)
+            x_hat_embedding.extend(x_embedding)
+            x_hat_encoding.extend(x_encoding)
+            
+            
+            # is it encoding or embedding?
+            test_mse_all.append(mean_squared_error(x_encoding.flatten(), batch_data.flatten()))
 
-        test_nmi = compute_NMI(test_k_all, labels[:len(test_k_all)])
-        test_purity = compute_purity(test_k_all, labels[:len(test_k_all)])
+        test_nmi = compute_NMI(k_all, labels[:len(k_all)])
+        test_purity = compute_purity(k_all, labels[:len(k_all)])
         test_mse = np.mean(test_mse_all)
 
     results = {}
@@ -624,7 +642,7 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
     results["MSE"] = test_mse
 #    results["optimization_target"] = 1 - test_nmi
 
-    return results, test_rec_all, test_k_all, test_rec_encoding
+    return results, x_hat_embedding, k_all, x_hat_encoding
 
 # <codecell>
 
@@ -747,8 +765,8 @@ pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 # <codecell>
 
-# reshaping the data
-resh = joint_positions.reshape(-1, __NB_DIMS__ * 19)
+# reshaping the data, the selection is there to be sure
+reshaped_joint_position = joint_positions[:,:,:__NB_DIMS__].reshape(-1, 19 * __NB_DIMS__)
 
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction
@@ -757,26 +775,34 @@ scaler = MinMaxScaler()
 
 # <codecell>
 
-#nb_of_data_points = (resh.shape[0] // config['batch_size']) * config['batch_size']
-nb_of_data_points = int(resh.shape[0] * 0.7)
+joint_positions.shape
 
-data_train = scaler.fit_transform(resh[:nb_of_data_points])
-data_test = scaler.transform(resh[nb_of_data_points:])
+# <codecell>
+
+data_test.shape
+
+# <codecell>
+
+#nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
+nb_of_data_points = int(joint_positions.shape[0] * 0.7)
+
+data_train = scaler.fit_transform(reshaped_joint_position[:nb_of_data_points])
+data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
 # just generating some labels, no clue what they are for except validation?
-labels_train = np.array(list(range(resh.shape[0])))
+labels = np.array(list(range(reshaped_joint_position.shape[0])))
 
 data = {
-  "X_val": data_test,
-  "y_val": labels_train[nb_of_data_points:],
   "X_train": data_train,
-  "y_train": labels_train[:nb_of_data_points]
+  "X_val": data_test,
+  "y_train": labels[:nb_of_data_points],
+  "y_val": labels[nb_of_data_points:]
 }
 
 #data = {
 #  "X_val": data_train,
-#  "y_val": labels_train,
+#  "y_val": labels,
 #  "X_train": data_train,
-#  "y_train": labels_train
+#  "y_train": labels
 #}
 
 # <markdowncell>
@@ -798,25 +824,13 @@ reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-
 # <codecell>
 
 plot_losses(losses)
-plot_latent_frame_distribution(res[2])
+plot_latent_frame_distribution(res[2], nb_bins=__latent_dim__)
 plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
-reconstructed_from_encoding.shape
-
-# <codecell>
-
-reconstructed_from_encoding_val.shape
-
-
-# <codecell>
-
-nb_of_data_points
-
-# <codecell>
-
-plot_comparing_joint_position_with_reconstructed(joint_positions, np.vstack((reconstructed_from_encoding, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                 np.vstack((reconstructed_from_encoding, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
@@ -842,6 +856,76 @@ plot_comparing_joint_position_with_reconstructed(joint_positions, np.vstack((rec
 # os.system('cp {0} {0}.png'.format(path))
 # display.Image(filename=f"{path}.png")
 # ``` 
+
+# <codecell>
+
+def gif_with_x(x, embeddings, file_path=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+    
+    Args:
+        embeddings: [<embeddings_id>]    
+            assumed to be in sequence with `get_frame_path` function.
+        file_path: <str>, default: SEQUENCE_GIF_PATH  
+            file path used to get 
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    if file_path is None:
+        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
+    else:
+        gif_file_path = file_path
+
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    with imageio.get_writer(gif_file_path, mode='I') as writer:
+        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+        last = -1
+        for i, (filename, emb_id) in enumerate(filenames):
+            frame = 2*(i**0.5)
+            if round(frame) > round(last):
+                last = frame
+            else:
+                continue
+                
+            image = cv2.imread(filename)  
+            
+            for p in x[i]:
+                cv2.circle(image, tuple(p.astype('int').tolist()), radius=3, thickness=-1, color=(0,255,0)) 
+                
+            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
+            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+            writer.append_data(image)
+
+        image = imageio.imread(filename)
+        writer.append_data(image)
+    
+    return gif_file_path
+
+# <codecell>
+
+
+
+# <codecell>
+
+x = reconstructed_from_encoding
+i = 10
+image = cv2.imread(get_frame_path(i))  
+
+for p in x[i]:
+    cv2.circle(image, tuple((p + np.array()).astype('int').tolist()), radius=3, thickness=-1, color=(0,255,0)) 
+
+# <codecell>
+
+plt.imshow(image)
+
+# <codecell>
+
+# change to 
+_p = gif_with_x(x=reconstructed_from_encoding, embeddings=res[2])
+
+os.system('cp {0} {0}.png'.format(_p))
+display.Image(filename="{}.png".format(_p))
 
 # <codecell>
 

@@ -151,8 +151,8 @@ class SOMVAE:
         self.k
         self.z_q
         self.z_q_neighbors
-        self.reconstruction_q
-        self.reconstruction_e
+        self.x_hat_embedding
+        self.x_hat_encoding
         self.loss_reconstruction
         self.loss_commit
         self.loss_som
@@ -282,7 +282,7 @@ class SOMVAE:
 
 
     @lazy_scope
-    def reconstruction_q(self):
+    def x_hat_embedding(self):
         """Reconstructs the input from the embeddings."""
         if self.mnist:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
@@ -306,7 +306,7 @@ class SOMVAE:
 
 
     @lazy_scope
-    def reconstruction_e(self):
+    def x_hat_encoding(self):
         """Reconstructs the input from the encodings."""
         if self.mnist:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
@@ -331,8 +331,8 @@ class SOMVAE:
     @lazy_scope
     def loss_reconstruction(self):
         """Computes the combined reconstruction loss for both reconstructions."""
-        loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.reconstruction_q)
-        loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.reconstruction_e)
+        loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.x_hat_embedding)
+        loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.x_hat_encoding)
         #loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
         loss_rec_mse = loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
