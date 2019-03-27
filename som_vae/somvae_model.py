@@ -109,7 +109,7 @@ class SOMVAE:
     """Class for the SOM-VAE model as described in https://arxiv.org/abs/1806.02199"""
 
     def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
-            input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1., mnist=True):
+            input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1., mnist=True, loss_weight_embedding=1., loss_weight_encoding=1.):
         """Initialization method for the SOM-VAE model object.
         
         Args:
@@ -141,6 +141,8 @@ class SOMVAE:
         self.gamma = gamma
         self.tau = tau
         self.mnist = mnist
+        self.loss_weight_embedding = loss_weight_embedding
+        self.loss_weight_encoding = loss_weight_encoding
         self.batch_size
         self.embeddings
         self.transition_probabilities
@@ -298,10 +300,7 @@ class SOMVAE:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_q)
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                # old version based on normalised data
                 x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
-                #x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
-                #x_hat = tf.reshape(x_hat, [-1, 1, self.input_length, self.input_channels])
         return x_hat
 
 
@@ -333,8 +332,7 @@ class SOMVAE:
         """Computes the combined reconstruction loss for both reconstructions."""
         loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.x_hat_embedding)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.x_hat_encoding)
-        #loss_rec_mse = loss_rec_mse_zq + loss_rec_mse_ze
-        loss_rec_mse = loss_rec_mse_ze
+        loss_rec_mse = self.loss_weight_embedding * loss_rec_mse_zq + self.loss_weight_encoding * loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
         return loss_rec_mse
 
