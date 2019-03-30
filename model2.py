@@ -27,6 +27,10 @@ POSE_FRAME_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/c
 
 SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id=FLY)
 
+# <codecell>
+
+
+
 # <markdowncell>
 
 # # imports & functions
@@ -336,9 +340,11 @@ def lighten_color(color, amount=0.5):
 def lighten_int_colors(cs, amount=0.5):
     return [(np.array(lighten_color(np.array(c) / 255, amount=amount)) * 255).astype(np.int).tolist() for c in cs]
 
-# taken from https://github.com/NeLy-EPFL/drosoph3D/blob/master/GUI/plot_util.py
 def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickness=None,
                        draw_limbs=None, circle_color=None):
+    """
+    taken from https://github.com/NeLy-EPFL/drosoph3D/blob/master/GUI/plot_util.py
+    """
     if colors is None:
         colors = skeleton.colors
     if thickness is None:
@@ -950,16 +956,7 @@ stop
 
 # <markdowncell>
 
-# ## cool gifs
-
-# <markdowncell>
-
-# ```
-# # use this to display a gif inside the notebook, no idea why a function doesn't work
-# # this is a hack to display the gif inside the notebook
-# os.system('cp {0} {0}.png'.format(path))
-# display.Image(filename=f"{path}.png")
-# ``` 
+# ## cool videos 
 
 # <codecell>
 
@@ -975,21 +972,17 @@ def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor, to_2d=True):
 
 __FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
 __FRAME_BAR_MARKER__ = (0, 255, 255)
-__N_FRAMES__ = 1000
 
-def create_gif_of_sequence(sequence):
+def create_gif_of_sequence(sequence, cluster_id, n_frames_for_scaling=700):
     # TODO this is a bit shitty...
     gif_file_path = _get_and_check_file_path_((sequence[0], sequence[-1]))
                                               
     frame_paths =  [(get_frame_path(i), i) for i in sequence]
     last_frame_id = frame_paths[0][1] - 1
     
-    # TODO add a line for each frame
-    # TODO mark the current one red, rest in blue
-    
     image_width = cv2.imread(frame_paths[0][0]).shape[1]
     
-    lines_pos = (np.array(sequence) / __N_FRAMES__ * image_width).astype(np.int).tolist()
+    lines_pos = (np.array(sequence) / n_frames_for_scaling * image_width).astype(np.int).tolist()
     
     frames = []
     for i, (frame_path, frame_id) in enumerate(frame_paths):
@@ -1044,12 +1037,6 @@ def group_by_cluster(data):
     return {embedding_id: [el[1] for el in emb_frames] for embedding_id, emb_frames in groupby(sorted(sequences, key=lambda x: x[0]), key=lambda x: x[0])}
 
 
-def cluster_videos(cluster_assignments, max_clusters=10):
-    paths = sorted([flatten(sequences) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()], key=len, reverse=True)
-    paths = [create_gif_of_sequence(s) for s in paths[:max_clusters]]
-    return paths 
-
-
 def get_frame_path(frame_id, path=POSE_FRAME_PATH, camera_id=CAMERA_OF_INTEREST):
     return path.format(camera_id=camera_id, frame_id=frame_id)
 
@@ -1079,16 +1066,10 @@ def _add_frame_and_embedding_id_(frame, emb_id, frame_id):
     return frame
 
 
-def create_gifs_for_clusters(cluster_assignments, up_to_n_clusters=10):
-    """
-    Args:
-        cluster_assignments: list of assignments for each frame
-    Returns:
-        file paths of the created gifs
-    """
-    sequences = sorted(group_by_cluster(cluster_assignments), key=len, reverse=True)
-
-    return [create_gif_of_sequence(s) for s in sequences[:up_to_n_clusters]]
+def cluster_videos(cluster_assignments, max_clusters=10):
+    paths = sorted([(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()], key=lambda x: len(x[0], reverse=True)
+    paths = [create_gif_of_sequence(fs, cluster_id) for fs, cluster_id in paths[:max_clusters]]
+    return paths 
 
 # <codecell>
 
@@ -1100,6 +1081,7 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
             will plot all of them, the colors get lighter
         embeddings: [<embeddings_id>]    
             assumed to be in sequence with `get_frame_path` function.
+            length of embeddings -> number of frames
         file_path: <str>, default: SEQUENCE_GIF_PATH  
             file path used to get 
     Returns:
@@ -1107,12 +1089,13 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
     """
     gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings')) + '.mp4'
     
+    # TODO this should be done globally
     cluster_ids = np.unique(embeddings)
     cluster_colours = dict(zip(cluster_ids, 
-                               (np.array(sns.color_palette(n_colors=len(cluster_ids))) * 255).astype(np.int)))
+                               (np.array(sns.color_palette('cubehelix', n_colors=len(cluster_ids))) * 255).astype(np.int)))
     
-    image_width = cv2.imread(get_frame_path(0)).shape[1]
-    lines_pos = (np.array(range(__N_FRAMES__)) * 1 / image_width).astype(np.int)
+    image_height, image_width, _ = cv2.imread(get_frame_path(0)).shape
+    lines_pos = ((np.array(range(len(embeddings))) / len(embeddings)) * image_width).astype(np.int)
     
     def pipeline(frame, frame_id, embedding_id):
         # kinda ugly... note that some variables are from the upper "frame"
@@ -1124,16 +1107,11 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
                                    colors=lighten_int_colors(skeleton.colors, 
                                                              amount=np.linspace(0, 0.5, len(xs))[x_i]))
                 
-                
-        # marking the embedding id on the side
-        cv2.line(f, (0, embedding_id), (10, embedding_id), (0, 255, 0), 2)
-        
-        
         for line_idx, l in enumerate(lines_pos):
             if line_idx == frame_id:
-                cv2.line(f, (l, 0), (l, 10), __FRAME_ACTIVE_COLOUR__, 2) 
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colours[embeddings[line_idx]].tolist(), 2) 
             else:
-                cv2.line(f, (l, 0), (l, 10), __FRAME_BAR_MARKER__, 1) 
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colours[embeddings[line_idx]].tolist(), 1) 
         
         return f
         
@@ -1144,21 +1122,42 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
 
 # <codecell>
 
+# full video
+_p = comparision_video_of_reconstruction((joint_positions_raw[:,:,:2], 
+                  reverse_pos_pipeline(reconstructed_from_encoding),
+                  reverse_pos_pipeline(reconstructed_from_embedding)), 
+                 embeddings=res[2])
+
+
+display_video(_p)
+
+# <codecell>
+
 cluster_vids = cluster_videos(res[2])
 
 # <codecell>
 
-
-
-# <codecell>
-
-display_video(cluster_vids[0])
+idx = 0
+display_video(cluster_vids[idx])
 
 # <codecell>
 
-idx = 0 
-os.system('cp {0} {0}.png'.format(cluster_vids[idx]))
-display.Image(filename="{}.png".format(cluster_vids[idx]))
+idx = 1
+display_video(cluster_vids[idx])
+
+# <codecell>
+
+idx = 4
+
+# <codecell>
+
+idx += 1
+display_video(cluster_vids[idx])
+
+# <codecell>
+
+idx = -1
+display_video(cluster_vids[idx])
 
 # <codecell>
 
@@ -1167,22 +1166,16 @@ _p = comparision_video_of_reconstruction((joint_positions_raw[:,:,:2],
                   reverse_pos_pipeline(reconstructed_from_embedding)), 
                  embeddings=res[2])
 
-# shitty way of displaying them here...
-#os.system('cp {0} {0}.png'.format(_p))
-#display.Image(filename="{}.png".format(_p))
+
+display_video(_p)
 
 # <codecell>
 
-file
+display_video(_p)
 
 # <codecell>
 
-os.system('cp {0} {0}.png'.format(_p))
-display.Image(filename="{}.png".format(_p))
-
-# <codecell>
-
-_p
+# oold code
 
 # <codecell>
 
