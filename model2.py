@@ -25,11 +25,11 @@ FLY = "181220_Rpr_R57C10_GC6s_tdTom"
 POSE_DATA_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/pose_result__mnt_NAS_SVB_181220_Rpr_R57C10_GC6s_tdTom_001_coronal_behData_images_renamed.pkl".format(fly_id=FLY)
 POSE_FRAME_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/camera_{{camera_id}}_img_{{frame_id:06d}}.jpg".format(fly_id=FLY)
 
-SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{{end_frame}}.gif".format(fly_id=FLY)
+SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id=FLY)
 
 # <markdowncell>
 
-# # imports & general functions
+# # imports & functions
 
 # <markdowncell>
 
@@ -69,6 +69,7 @@ from IPython import display
 
 from importlib import reload
 import inspect
+from itertools import groupby
 import sys
 sys.path.append('/home/samuel/')
 
@@ -87,6 +88,33 @@ from som_vae.utils import *
 
 def extract_args(config, function):
     return {k:config[k] for k in inspect.getfullargspec(function).args if k in config}
+
+# <codecell>
+
+def chunks(l, n):
+    """Yield successive n-sized chunks from l. Use it to create batches."""
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
+
+# <codecell>
+
+def convert_bytes(num):
+    """
+    this function will convert bytes to MB.... GB... etc
+    """
+    for x in ['bytes', 'KB', 'MB', 'GB', 'TB']:
+        if num < 1024.0:
+            return "%3.1f %s" % (num, x)
+        num /= 1024.0
+
+
+def file_size(file_path):
+    """
+    this function will return the file size
+    """
+    if os.path.isfile(file_path):
+        file_info = os.stat(file_path)
+        return convert_bytes(file_info.st_size)
 
 # <codecell>
 
@@ -264,121 +292,20 @@ def plot_cluster_assignment_over_time(cluster_assignments):
 
 # <markdowncell>
 
-# ## gif helpers
+# ## video and gif helpers
 
 # <codecell>
 
-def group_by_cluster(data):
-    """Returns the lengths of sequences.
-    Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
-    
-    """
-    sequences = []
-    cur_embedding_idx = 0
-    cur_seq = [0]
-    for i in range(len(data))[1:]:
-        if data[i] == data[cur_embedding_idx]:
-            cur_seq += [i]
-        else:
-            sequences += [cur_seq]
-            cur_embedding_idx = i
-            cur_seq = [i]
-            
-    sequences += [cur_seq]
-            
-    return sequences
+import io
+import base64
+from IPython.display import HTML
 
-def get_frame_path(frame_id, path=POSE_FRAME_PATH, camera_id=CAMERA_OF_INTEREST):
-    return path.format(camera_id=camera_id, frame_id=frame_id)
-
-
-def create_gif_of_sequence(sequence, file_name=None):
-    if file_name is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame=sequence[0], end_frame=sequence[-1])
-    else:
-        gif_file_path = file_name
-
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), i) for i in sequence]
-        last = -1
-        last_frame_id = filenames[0][1] - 1
-        for i, (filename, frame_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            # adding fr nb to image
-            image = cv2.imread(filename)  
-            if last_frame_id + 1 != frame_id:
-                color = (0, 255, 255)
-            else:
-                color = (255, 255, 255)
-                
-            last_frame_id = frame_id
-                
-            image = cv2.putText(img=np.copy(image), text=str(frame_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=color, thickness=2)
-            #image = imageio.imread(filename)
-            writer.append_data(image)
-
-        image = imageio.imread(filename)
-        writer.append_data(image)
-    
-    return gif_file_path
-
-def video_with_embedding(embeddings, file_path=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-    
-    Args:
-        embeddings: [<embeddings_id>]    
-            assumed to be in sequence with `get_frame_path` function.
-        file_path: <str>, default: SEQUENCE_GIF_PATH  
-            file path used to get 
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    if file_path is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
-    else:
-        gif_file_path = file_path
-
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-        last = -1
-        for i, (filename, emb_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            # adding fr nb to image
-            image = cv2.imread(filename)  
-            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-            writer.append_data(image)
-
-        image = imageio.imread(filename)
-        writer.append_data(image)
-    
-    return gif_file_path
-
-
-def create_gifs_for_clusters(cluster_assignments, up_to_n_clusters=10):
-    """
-    Args:
-        cluster_assignments: list of assignments for each frame
-    Returns:
-        file paths of the created gifs
-    """
-    sequences = sorted(group_by_cluster(cluster_assignments), key=len, reverse=True)
-
-    return [create_gif_of_sequence(s) for s in sequences[:up_to_n_clusters]]
+def display_video(path):
+    video = io.open(path, 'r+b').read()
+    encoded = base64.b64encode(video)
+    return HTML(data='''<video alt="test" controls>
+                    <source src="data:video/mp4;base64,{0}" type="video/mp4" />
+                 </video>'''.format(encoded.decode('ascii')))
 
 # <codecell>
 
@@ -483,9 +410,10 @@ def gif_with_x(x, embeddings, file_path=None):
             image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
             image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
             writer.append_data(image)
+            writer.append_data(image)
 
-        image = imageio.imread(filename)
-        writer.append_data(image)
+        #image = imageio.imread(filename)
+        #writer.append_data(image)
     
     return gif_file_path
 
@@ -532,9 +460,10 @@ def gif_with_xs(xs, embeddings, file_path=None):
             image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
             image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
             writer.append_data(image)
+            writer.append_data(image)
 
-        image = imageio.imread(filename)
-        writer.append_data(image)
+        #image = imageio.imread(filename)
+        #writer.append_data(image)
     
     return gif_file_path
 
@@ -611,6 +540,16 @@ ploting_frames(joint_positions)
 # <markdowncell>
 
 # # SOM-VAE model
+
+# <markdowncell>
+
+# ## constant
+
+# <codecell>
+
+__TF_DEFAULT_SESSION_CONFIG__ = tf.ConfigProto()
+__TF_DEFAULT_SESSION_CONFIG__.gpu_options.allow_growth = True 
+__TF_DEFAULT_SESSION_CONFIG__.gpu_options.polling_inactive_delay_msecs = 10
 
 # <markdowncell>
 
@@ -745,7 +684,7 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
 
 # <codecell>
 
-def evaluate_model(model, x, modelpath, batch_size, data, labels):
+def evaluate_model(model, x, modelpath, batch_size, data, labels=None, tf_session_config=None):
     """Evaluates the performance of the trained model in terms of normalized
     mutual information, purity and mean squared error.
     
@@ -761,49 +700,40 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels):
         cluster assignments for each row
         encoding of x
     """
-    saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
+    if tf_session_config is None:
+        tf_session_config = __TF_DEFAULT_SESSION_CONFIG__
     
+    saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     
     num_batches = len(data)//batch_size
     
-    # TODO this belongs into the global config handling
-    session_config = tf.ConfigProto()
-    session_config.gpu_options.allow_growth = True 
-    session_config.gpu_options.polling_inactive_delay_msecs = 10
-    
-    with tf.Session(config=session_config) as sess:
-        
+    with tf.Session(config=tf_session_config) as sess:
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, modelpath)
 
-        k_all = []
-        x_hat_embedding = []
-        x_hat_encoding = []
-        test_mse_all = []
-        x_hat_latent = []
-        print("Evaluation...")
-        for i in range(num_batches):
-            batch_data = data[i*batch_size:(i+1)*batch_size]
-            _k, x_embedding, x_encoding, x_latent = sess.run([model.k, model.x_hat_embedding, model.x_hat_encoding, model.z_e], feed_dict={x: batch_data})
-            k_all.extend(_k)
-            x_hat_embedding.extend(x_embedding)
-            x_hat_encoding.extend(x_encoding)
-            x_hat_latent.extend(x_latent)
-            
-            # is it encoding or embedding?
-            test_mse_all.append(mean_squared_error(x_encoding.flatten(), batch_data.flatten()))
+        cluster_assignments, x_hat_embedding, x_hat_encoding, x_hat_latent = [np.vstack(_r) for _r in  
+                                                                              zip(*[sess.run([model.k,  
+                                                                                              model.x_hat_embedding,
+                                                                                              model.x_hat_encoding,
+                                                                                              model.z_e],  feed_dict={x: batch_data}) 
+                                                                                    for batch_data in chunks(data, num_batches)])]
 
-        test_nmi = compute_NMI(k_all, labels[:len(k_all)])
-        test_purity = compute_purity(k_all, labels[:len(k_all)])
-        test_mse = np.mean(test_mse_all)
+        cluster_assignments = cluster_assignments.reshape(-1)
+        mse_encoding = mean_squared_error(x_hat_encoding.flatten(), data.flatten())
+        mse_embedding = mean_squared_error(x_hat_embedding.flatten(), data.flatten())
+        if labels is not None:
+            nmi = compute_NMI(cluster_assignments.tolist(), labels[:len(cluster_assignments)])
+            purity = compute_purity(cluster_assignments.tolist(), labels[:len(cluster_assignments)])
 
     results = {}
-    results["NMI"] = test_nmi
-    results["Purity"] = test_purity
-    results["MSE"] = test_mse
+    #results["NMI"] = nmi 
+    #results["Purity"] = purity 
+    results["MSE (encoding)"] = mse_encoding 
+    results["MSE (embedding)"] = mse_embedding 
+    results["nb of used clusters"] = len(np.unique(cluster_assignments))
 #    results["optimization_target"] = 1 - test_nmi
 
-    return results, x_hat_embedding, k_all, x_hat_encoding, x_hat_latent
+    return results, x_hat_embedding, cluster_assignments, x_hat_encoding, x_hat_latent
 
 # <codecell>
 
@@ -811,7 +741,7 @@ config
 
 # <codecell>
 
-def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, mnist, time_series, config):
+def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, mnist, time_series, config):
     """Main method to build a model, train it and evaluate it.
     
     Args:
@@ -831,13 +761,13 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
     """
     print(f"running with config: {config}")
     if config['mnist']:
-        x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
         input_length = __NB_DIMS__
         input_channels = 19
+        x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
     else:
-        x = tf.placeholder(tf.float32, shape=[None, input_channels])
         input_length = 1
         input_channels = 19 * __NB_DIMS__
+        x = tf.placeholder(tf.float32, shape=[None, input_channels])
         
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
 
@@ -856,7 +786,8 @@ def main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, dec
     if not save_model:
         shutil.rmtree(os.path.dirname(modelpath))
         
-    print(f"got: {result[0]}")
+    print(f"got (train): {result[0]}")
+    print(f"got (val: {result[0]}")
 
     return result, model, (train_losses, test_losses, test_losses_reconstruction), result_val
 
@@ -980,16 +911,11 @@ reload(somvae_model)
 
 tf.reset_default_graph()
 
-main_args = inspect.getfullargspec(main).args
-res, mdl, losses, res_val = main(**{**{k:config[k] for k in main_args if k in config}, **data, **{"config": config}})
+_args = inspect.getfullargspec(train_and_evaluate_model).args
+res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:config[k] for k in _args if k in config}, **data, **{"config": config}})
 
 reconstructed_from_encoding =  scaler.inverse_transform(res[3]).reshape(-1, 19, 2)
 reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-1, 19, 2)
-reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
-reconstructed_from_embedding_val = scaler.inverse_transform(res_val[1]).reshape(-1, 19, 2)
-
-# <codecell>
-
 reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
 reconstructed_from_embedding_val = scaler.inverse_transform(res_val[1]).reshape(-1, 19, 2)
 
@@ -1011,7 +937,8 @@ plot_comparing_joint_position_with_reconstructed(joint_positions,
 
 # <codecell>
 
-((joint_positions[:len(res[3])] - reconstructed_from_encoding) ** 2).mean()
+((joint_positions[:len(res[3])][:,:,:2] - reconstructed_from_encoding) ** 2).mean()
+((joint_positions[:len(res[3])][:,:,:2] - reconstructed_from_embedding) ** 2).mean()
 
 # <codecell>
 
@@ -1038,7 +965,7 @@ stop
 
 def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor, to_2d=True):
     # TODO add reshaping and other steps here as well
-    _x = add_third_dimension(reconstructed_from_encoding) + normalisation_term 
+    _x = add_third_dimension(x) + normalisation_term 
     if to_2d:
         return _x[:,:,:2]
     else:
@@ -1046,34 +973,225 @@ def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor, to_2d=True):
 
 # <codecell>
 
-# change to 
-_p = gif_with_xs((joint_positions_raw[:,:,:2], reverse_pos_pipeline(reconstructed_from_encoding), reverse_pos_pipeline(reconstructed_from_embedding)), embeddings=res[2])
+__FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
+__FRAME_BAR_MARKER__ = (0, 255, 255)
+__N_FRAMES__ = 1000
+
+def create_gif_of_sequence(sequence):
+    # TODO this is a bit shitty...
+    gif_file_path = _get_and_check_file_path_((sequence[0], sequence[-1]))
+                                              
+    frame_paths =  [(get_frame_path(i), i) for i in sequence]
+    last_frame_id = frame_paths[0][1] - 1
+    
+    # TODO add a line for each frame
+    # TODO mark the current one red, rest in blue
+    
+    image_width = cv2.imread(frame_paths[0][0]).shape[1]
+    
+    lines_pos = (np.array(sequence) / __N_FRAMES__ * image_width).astype(np.int).tolist()
+    
+    frames = []
+    for i, (frame_path, frame_id) in enumerate(frame_paths):
+        # adding fr nb to image
+        image = cv2.imread(frame_path)  
+        if last_frame_id + 1 != frame_id:
+            color = (0, 255, 255)
+        else:
+            color = (255, 255, 255)
+
+        last_frame_id = frame_id
+
+        image = cv2.putText(img=np.copy(image), text=str(frame_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=color, thickness=2)
+        
+        for line_idx, l in enumerate(lines_pos):
+            if line_idx == i:
+                cv2.line(image, (l, 0), (l, 10), __FRAME_ACTIVE_COLOUR__, 2) 
+            else:
+                cv2.line(image, (l, 0), (l, 10), __FRAME_BAR_MARKER__, 1) 
+        
+        frames += [image]
+                                              
+    _save_frames_(gif_file_path, frames, format='mp4')
+    
+    return gif_file_path
+
+
+# <codecell>
+
+def flatten(listOfLists):
+    return reduce(list.__add__, listOfLists, [])
+    
+    
+def group_by_cluster(data):
+    """Returns the lengths of sequences.
+    Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
+    
+    """
+    sequences = []
+    cur_embedding_idx = 0
+    cur_seq = [0]
+    for i in range(len(data))[1:]:
+        if data[i] == data[cur_embedding_idx]:
+            cur_seq += [i]
+        else:
+            sequences += [(data[cur_embedding_idx], cur_seq)]
+            cur_embedding_idx = i
+            cur_seq = [i]
+            
+    sequences += [(data[cur_embedding_idx], cur_seq)]
+            
+    return {embedding_id: [el[1] for el in emb_frames] for embedding_id, emb_frames in groupby(sorted(sequences, key=lambda x: x[0]), key=lambda x: x[0])}
+
+
+def cluster_videos(cluster_assignments, max_clusters=10):
+    paths = sorted([flatten(sequences) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()], key=len, reverse=True)
+    paths = [create_gif_of_sequence(s) for s in paths[:max_clusters]]
+    return paths 
+
+
+def get_frame_path(frame_id, path=POSE_FRAME_PATH, camera_id=CAMERA_OF_INTEREST):
+    return path.format(camera_id=camera_id, frame_id=frame_id)
+
+def _get_and_check_file_path_(args, template=SEQUENCE_GIF_PATH):
+    gif_file_path = template.format(begin_frame=args[0], end_frame=args[-1])
+    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    return gif_file_path
+    
+    
+def _save_frames_(file_path, frames, format='GIF', **kwargs):
+    """
+    If format==GIF then fps has to be None, duration should be ~10/60
+    If format==mp4 then duration has to be None, fps should be TODO
+    """
+    if format == 'GIF':
+        _kwargs = {'duration': 10/60}
+    elif format == 'mp4':
+        _kwargs = {'fps': 24}
+        
+    imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
+
+
+def _add_frame_and_embedding_id_(frame, emb_id, frame_id):
+    frame = cv2.putText(img=np.copy(frame), text=f"cluster_id: {emb_id:0>3}", org=(0, frame.shape[0] // 2), fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+    frame = cv2.putText(img=np.copy(frame), text=f"frame_id: {frame_id:0>4}", org=(0, (frame.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+    return frame
+
+
+def create_gifs_for_clusters(cluster_assignments, up_to_n_clusters=10):
+    """
+    Args:
+        cluster_assignments: list of assignments for each frame
+    Returns:
+        file paths of the created gifs
+    """
+    sequences = sorted(group_by_cluster(cluster_assignments), key=len, reverse=True)
+
+    return [create_gif_of_sequence(s) for s in sequences[:up_to_n_clusters]]
+
+# <codecell>
+
+def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+    
+    Args:
+        xs: [<pos data>] list of pos data, of shape: [frames, limb, dimensions] (can be just one, but in an array)
+            will plot all of them, the colors get lighter
+        embeddings: [<embeddings_id>]    
+            assumed to be in sequence with `get_frame_path` function.
+        file_path: <str>, default: SEQUENCE_GIF_PATH  
+            file path used to get 
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings')) + '.mp4'
+    
+    cluster_ids = np.unique(embeddings)
+    cluster_colours = dict(zip(cluster_ids, 
+                               (np.array(sns.color_palette(n_colors=len(cluster_ids))) * 255).astype(np.int)))
+    
+    image_width = cv2.imread(get_frame_path(0)).shape[1]
+    lines_pos = (np.array(range(__N_FRAMES__)) * 1 / image_width).astype(np.int)
+    
+    def pipeline(frame, frame_id, embedding_id):
+        # kinda ugly... note that some variables are from the upper "frame"
+        f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
+        
+        for x_i, x in enumerate(xs):
+            f = plot_drosophila_2d(x[frame_id].astype(np.int), 
+                                   img=f,
+                                   colors=lighten_int_colors(skeleton.colors, 
+                                                             amount=np.linspace(0, 0.5, len(xs))[x_i]))
+                
+                
+        # marking the embedding id on the side
+        cv2.line(f, (0, embedding_id), (10, embedding_id), (0, 255, 0), 2)
+        
+        
+        for line_idx, l in enumerate(lines_pos):
+            if line_idx == frame_id:
+                cv2.line(f, (l, 0), (l, 10), __FRAME_ACTIVE_COLOUR__, 2) 
+            else:
+                cv2.line(f, (l, 0), (l, 10), __FRAME_BAR_MARKER__, 1) 
+        
+        return f
+        
+    frames =  [pipeline(cv2.imread(get_frame_path(i)), i, emb_id) for i, emb_id in enumerate(embeddings)]
+    _save_frames_(gif_file_path, frames, format='mp4')
+    
+    return gif_file_path
+
+# <codecell>
+
+cluster_vids = cluster_videos(res[2])
+
+# <codecell>
+
+
+
+# <codecell>
+
+display_video(cluster_vids[0])
+
+# <codecell>
+
+idx = 0 
+os.system('cp {0} {0}.png'.format(cluster_vids[idx]))
+display.Image(filename="{}.png".format(cluster_vids[idx]))
+
+# <codecell>
+
+_p = comparision_video_of_reconstruction((joint_positions_raw[:,:,:2], 
+                  reverse_pos_pipeline(reconstructed_from_encoding),
+                  reverse_pos_pipeline(reconstructed_from_embedding)), 
+                 embeddings=res[2])
+
+# shitty way of displaying them here...
+#os.system('cp {0} {0}.png'.format(_p))
+#display.Image(filename="{}.png".format(_p))
+
+# <codecell>
+
+file
+
+# <codecell>
 
 os.system('cp {0} {0}.png'.format(_p))
 display.Image(filename="{}.png".format(_p))
 
 # <codecell>
 
-cluster_clips = create_gifs_for_clusters(res[2])
+_p
+
+# <codecell>
+
 full_clip = video_with_embedding(res[2])
 
 # <codecell>
 
 os.system('cp {0} {0}.png'.format(full_clip))
 display.Image(filename="{}.png".format(full_clip))
-
-# <codecell>
-
-idx = 0
-os.system('cp {0} {0}.png'.format(cluster_clips[idx]))
-display.Image(filename="{}.png".format(cluster_clips[idx]))
-
-
-# <codecell>
-
-idx = 2
-os.system('cp {0} {0}.png'.format(cluster_clips[idx]))
-display.Image(filename="{}.png".format(cluster_clips[idx]))
 
 # <codecell>
 
