@@ -27,10 +27,6 @@ POSE_FRAME_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/c
 
 SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id=FLY)
 
-# <codecell>
-
-
-
 # <markdowncell>
 
 # # imports & functions
@@ -86,7 +82,7 @@ from som_vae.utils import *
 
 # <codecell>
 
-plt.style.use("dark_background")
+plt.style.use("light_background")
 
 # <markdowncell>
 
@@ -944,7 +940,6 @@ tf.reset_default_graph()
 _args = inspect.getfullargspec(train_and_evaluate_model).args
 res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:config[k] for k in _args if k in config}, **data, **{"config": config}})
 
-
 def _reverse_to_original_shape_(pos_data, input_shape=None):
     if input_shape is None:
         input_shape = (__N_INPUT__, __NB_DIMS__)
@@ -979,20 +974,20 @@ print(((joint_positions[:len(res[3])] - reconstructed_from_embedding_train) ** 2
 print(((joint_positions[len(res[3]):] - reconstructed_from_encoding_val) ** 2).mean())
 print(((joint_positions[len(res[3]):] - reconstructed_from_embedding_val) ** 2).mean())
 
-# <codecell>
-
-stop
-
 # <markdowncell>
 
 # ## cool videos 
+
+# <markdowncell>
+
+# ### code
 
 # <codecell>
 
 __FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
 __FRAME_BAR_MARKER__ = (0, 255, 255)
 
-def create_gif_of_sequence(sequence, cluster_id, n_frames_for_scaling=700):
+def create_gif_of_sequence(sequence, cluster_id, cluster_colors, n_frames_for_scaling=NB_FRAMES):
     # TODO this is a bit shitty...
     gif_file_path = _get_and_check_file_path_((sequence[0], sequence[-1]))
                                               
@@ -1020,7 +1015,7 @@ def create_gif_of_sequence(sequence, cluster_id, n_frames_for_scaling=700):
             if line_idx == i:
                 cv2.line(image, (l, 0), (l, 10), __FRAME_ACTIVE_COLOUR__, 2) 
             else:
-                cv2.line(image, (l, 0), (l, 10), __FRAME_BAR_MARKER__, 1) 
+                cv2.line(image, (l, 0), (l, 10), cluster_colors[cluster_id], 1) 
         
         frames += [image]
                                               
@@ -1085,18 +1080,36 @@ def _add_frame_and_embedding_id_(frame, emb_id, frame_id):
     return frame
 
 
-def cluster_videos(cluster_assignments, max_clusters=10):
-    _t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
-    paths = sorted(_t, key=lambda x: len(x[0]), reverse=True)
-    paths = [create_gif_of_sequence(*p) for p in paths[:max_clusters]]
-    return paths 
+#def cluster_videos(cluster_assignments, cluster_colors, max_clusters=10):
+#    # tuple of: (<all the sequences for the cluster>, <cluster_id>)
+#    _t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
+#    _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+#    _t = [create_gif_of_sequence(*p, cluster_colors=cluster_colors) for p in _t[:max_clusters]]
+#    
+#    return _t 
+
+# <codecell>
+
+skeleton.colors
+
+# <codecell>
+
+[lighten_int_colors(skeleton.colors, amount=p) for p in np.linspace(1, 0.8, 2)]
+
+# <codecell>
+
+
+
+# <codecell>
+
+
 
 # <codecell>
 
 def _float_to_int_color_(colors):
-    return (np.array(colors) * 255).astype(np.int)
+    return (np.array(colors) * 255).astype(np.int).tolist()
     
-def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None):
+def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None, cluster_colors=None, cluster_assignment_idx=None, xs_labels=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
     
     Args:
@@ -1110,33 +1123,43 @@ def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None)
     Returns:
         <str>                            the file path under which the gif was saved
     """
-    gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings')) + '.mp4'
+    gif_file_path = _get_and_check_file_path_(('video-x_x-hat', 'with-embeddings_cluster_' + str(embeddings[cluster_assignment_idx][0])))
     
-    # TODO this should be done globally
-    cluster_ids = np.unique(embeddings)
-    cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+    if cluster_colors is None:
+        cluster_ids = np.unique(embeddings)
+        cluster_colors = dict(zip(cluster_ids, 
+                                  _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+        
+    if cluster_assignment_idx is None:
+        cluster_assignment_idx = list(range(embeddings.shape[0]))
+        gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings_cluster_all'))
     
     image_height, image_width, _ = cv2.imread(get_frame_path(0)).shape
-    lines_pos = ((np.array(range(len(embeddings))) / len(embeddings)) * image_width).astype(np.int)
+    lines_pos = ((np.array(range(NB_FRAMES)) / NB_FRAMES) * image_width)\
+                    .astype(np.int)[cluster_assignment_idx].tolist()
     
-    _train_test_split_marker = np.int(n_train / len(embeddings) * image_width)
-    _train_test_split_marker_colours = _float_to_int_color_(sns.color_palette(n_colors=2)).tolist()
+    
+    _train_test_split_marker = np.int(n_train / NB_FRAMES * image_width)
+    _train_test_split_marker_colours = _float_to_int_color_(sns.color_palette(n_colors=2))
+    
+    _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(xs))]
         
     def pipeline(frame, frame_id, embedding_id):
         # kinda ugly... note that some variables are from the upper "frame"
         f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
         
+        # xs are the multiple positional data to plot
         for x_i, x in enumerate(xs):
-            f = plot_drosophila_2d(x[frame_id].astype(np.int), 
-                                   img=f,
-                                   colors=lighten_int_colors(skeleton.colors, 
-                                                             amount=np.linspace(0, 0.5, len(xs))[x_i]))
+            f = plot_drosophila_2d(x[frame_id].astype(np.int), img=f, colors=_colors_for_pos_data[x_i])
             
+        
+        # train test split marker
         if n_train == frame_id:
             cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
         else:
             cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
         
+        # train / test text
         f = cv2.putText(img=np.copy(f), 
                         text='train' if frame_id < n_train else 'test',
                         org=(_train_test_split_marker, image_height - 40),
@@ -1144,16 +1167,18 @@ def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None)
                         fontScale=1,
                         color=_train_test_split_marker_colours[0 if frame_id < n_train else 1], 
                         thickness=1)
+        
                 
+        # cluster assignment bar
         for line_idx, l in enumerate(lines_pos):
             if line_idx == frame_id:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[embeddings[line_idx]].tolist(), 2) 
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 2) 
             else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[embeddings[line_idx]].tolist(), 1) 
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 1) 
         
         return f
         
-    frames =  [pipeline(cv2.imread(get_frame_path(i)), i, emb_id) for i, emb_id in enumerate(embeddings)]
+    frames =  [pipeline(cv2.imread(get_frame_path(i)), i, emb_id) for i, emb_id in enumerate(embeddings[cluster_assignment_idx])]
     _save_frames_(gif_file_path, frames, format='mp4')
     
     return gif_file_path
@@ -1164,7 +1189,16 @@ def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor):
     """TODO This is again pretty shitty... ultra hidden global variable"""
     return x + normalisation_term 
 
+# <markdowncell>
+
+# ### display
+
 # <codecell>
+
+cluster_assignments = np.hstack((res[2], res_val[2]))
+
+cluster_ids = np.unique(cluster_assignments)
+cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
 
 joint_pos_embedding = np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val))
 joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val))
@@ -1172,62 +1206,50 @@ joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed
 # <codecell>
 
 # full video
-_p = comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_pos_encoding, joint_pos_encoding, joint_pos_embedding]],
-                                         embeddings=np.hstack((res[2], res_val[2])),
-                                         n_train=res[2].shape[0])
+_p = comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
+                                         embeddings=cluster_assignments,
+                                         n_train=res[2].shape[0],
+                                         cluster_colors=cluster_colors,
+                                         xs_labels=["joint_pos_orig", "joint_pos_encoding", "joint_pos_embedding"]
+                                        )
 
+print(_p)
 display_video(_p)
 
 # <codecell>
 
-cluster_vids = cluster_videos(res[2])
+# Creating videos for each cluster
+from collections import OrderedDict
+
+__N_CLUSTER_TO_VIZ__ = 10
+
+_positional_data = [reverse_pos_pipeline(p) for p in [joint_pos_encoding, joint_pos_encoding, joint_pos_embedding]]
+
+_t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
+_t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+cluster_vids = OrderedDict((p[1], comparision_video_of_reconstruction(_positional_data,
+                                                    embeddings=cluster_assignments,
+                                                    n_train=res[2].shape[0],
+                                                    cluster_colors=cluster_colors,
+                                                    cluster_assignment_idx=p[0]))
+                    for p in _t[:__N_CLUSTER_TO_VIZ__])
 
 # <codecell>
 
+# specific cluster id
+cluster_id_of_interest = 40
+display_video(cluster_vids[cluster_id_of_interest])
+
+# <codecell>
+
+# order by total size
 idx = 0
-display_video(cluster_vids[idx])
-
-# <codecell>
-
-idx = 1
-display_video(cluster_vids[idx])
+display_video(list(cluster_vids.values())[idx])
 
 # <codecell>
 
 idx += 1
-display_video(cluster_vids[idx])
-
-# <codecell>
-
-idx = -1
-display_video(cluster_vids[idx])
-
-# <codecell>
-
-_p = comparision_video_of_reconstruction((joint_positions_raw[:,:,:2], 
-                  reverse_pos_pipeline(reconstructed_from_encoding),
-                  reverse_pos_pipeline(reconstructed_from_embedding)), 
-                 embeddings=res[2])
-
-
-display_video(_p)
-
-# <codecell>
-
-display_video(_p)
-
-# <codecell>
-
-# oold code
-
-# <codecell>
-
-full_clip = video_with_embedding(res[2])
-
-# <codecell>
-
-os.system('cp {0} {0}.png'.format(full_clip))
-display.Image(filename="{}.png".format(full_clip))
+display_video(list(cluster_vids.values())[idx])
 
 # <codecell>
 
