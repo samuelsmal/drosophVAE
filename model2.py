@@ -84,9 +84,13 @@ from drosophpose.GUI import skeleton
 from som_vae import somvae_model
 from som_vae.utils import *
 
+# <codecell>
+
+plt.style.use("dark_background")
+
 # <markdowncell>
 
-# ## general helpers
+# ## utils
 
 # <codecell>
 
@@ -134,7 +138,7 @@ fix_layout()
 
 # <codecell>
 
-def load_data(path=POSE_DATA_PATH):
+def _load_data_(path=POSE_DATA_PATH):
     with open(POSE_DATA_PATH, 'rb') as f:
         pose_data_raw = pickle.load(f)
         return pose_data_raw['points2d']
@@ -145,7 +149,7 @@ def _check_shape_(joint_positions):
     """ should be (7, <nb frames>, 38, 2)
     7 for the images, some should be 0 because it didn't record the images for these points
     1000 for the nb of frames
-    38 for the features (some for the legs ...) check skeleton.py in semigh's code
+    38 for the features (some for the legs, antennae ...) check skeleton.py in semigh's code
     2 for the pose dimensions
     """
     s = joint_positions.shape
@@ -176,7 +180,8 @@ def _get_visible_legs_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
 # <codecell>
 
 def get_data(path=POSE_DATA_PATH):
-    return reduce(lambda acc, el: el(acc), [load_data, _simple_checks_, _get_camera_of_interest_, _get_visible_legs_], path)
+    fns = [_load_data_, _simple_checks_, _get_camera_of_interest_, _get_visible_legs_]
+    return reduce(lambda acc, el: el(acc), fns, path)
 
 # <codecell>
 
@@ -378,100 +383,100 @@ def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickn
 
 # <codecell>
 
-def gif_with_x(x, embeddings, file_path=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-    
-    Args:
-        embeddings: [<embeddings_id>]    
-            assumed to be in sequence with `get_frame_path` function.
-        file_path: <str>, default: SEQUENCE_GIF_PATH  
-            file path used to get 
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    if file_path is None:
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
-    else:
-        gif_file_path = file_path
-
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-        last = -1
-        for i, (filename, emb_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            image = cv2.imread(filename)  
-            
-            
-            # adding 
-            image = plot_drosophila_2d(x[i].astype(np.int), img=image)
-                
-            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
-            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-            writer.append_data(image)
-            writer.append_data(image)
-
-        #image = imageio.imread(filename)
-        #writer.append_data(image)
-    
-    return gif_file_path
-
-
-def gif_with_xs(xs, embeddings, file_path=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-    
-    Args:
-        xs: [<pos data: [frames, limb, dimensions]>]
-            will plot all of them, the colors get lighter
-        embeddings: [<embeddings_id>]    
-            assumed to be in sequence with `get_frame_path` function.
-        file_path: <str>, default: SEQUENCE_GIF_PATH  
-            file path used to get 
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    if file_path is None:
-        # arguments for the path are missused, just FYI
-        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video-x_x-hat", end_frame="with-embeddings")
-    else:
-        gif_file_path = file_path
-
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    with imageio.get_writer(gif_file_path, mode='I') as writer:
-        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-        last = -1
-        for i, (filename, emb_id) in enumerate(filenames):
-            frame = 2*(i**0.5)
-            if round(frame) > round(last):
-                last = frame
-            else:
-                continue
-                
-            image = cv2.imread(filename)  
-            
-            
-            # adding 
-            for x_i, x in enumerate(xs):
-                image = plot_drosophila_2d(x[i].astype(np.int), img=image, colors=lighten_int_colors(skeleton.colors, amount=np.linspace(0, 0.5, len(xs))[x_i]))
-                
-            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
-            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-            writer.append_data(image)
-            writer.append_data(image)
-
-        #image = imageio.imread(filename)
-        #writer.append_data(image)
-    
-    return gif_file_path
+#def gif_with_x(x, embeddings, file_path=None):
+#    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+#    
+#    Args:
+#        embeddings: [<embeddings_id>]    
+#            assumed to be in sequence with `get_frame_path` function.
+#        file_path: <str>, default: SEQUENCE_GIF_PATH  
+#            file path used to get 
+#    Returns:
+#        <str>                            the file path under which the gif was saved
+#    """
+#    if file_path is None:
+#        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
+#    else:
+#        gif_file_path = file_path
+#
+#    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+#    
+#    with imageio.get_writer(gif_file_path, mode='I') as writer:
+#        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+#        last = -1
+#        for i, (filename, emb_id) in enumerate(filenames):
+#            frame = 2*(i**0.5)
+#            if round(frame) > round(last):
+#                last = frame
+#            else:
+#                continue
+#                
+#            image = cv2.imread(filename)  
+#            
+#            
+#            # adding 
+#            image = plot_drosophila_2d(x[i].astype(np.int), img=image)
+#                
+#            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
+#            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+#            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+#            writer.append_data(image)
+#            writer.append_data(image)
+#
+#        #image = imageio.imread(filename)
+#        #writer.append_data(image)
+#    
+#    return gif_file_path
+#
+#
+#def gif_with_xs(xs, embeddings, file_path=None):
+#    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+#    
+#    Args:
+#        xs: [<pos data: [frames, limb, dimensions]>]
+#            will plot all of them, the colors get lighter
+#        embeddings: [<embeddings_id>]    
+#            assumed to be in sequence with `get_frame_path` function.
+#        file_path: <str>, default: SEQUENCE_GIF_PATH  
+#            file path used to get 
+#    Returns:
+#        <str>                            the file path under which the gif was saved
+#    """
+#    if file_path is None:
+#        # arguments for the path are missused, just FYI
+#        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video-x_x-hat", end_frame="with-embeddings")
+#    else:
+#        gif_file_path = file_path
+#
+#    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+#    
+#    with imageio.get_writer(gif_file_path, mode='I') as writer:
+#        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
+#        last = -1
+#        for i, (filename, emb_id) in enumerate(filenames):
+#            frame = 2*(i**0.5)
+#            if round(frame) > round(last):
+#                last = frame
+#            else:
+#                continue
+#                
+#            image = cv2.imread(filename)  
+#            
+#            
+#            # adding 
+#            for x_i, x in enumerate(xs):
+#                image = plot_drosophila_2d(x[i].astype(np.int), img=image, colors=lighten_int_colors(skeleton.colors, amount=np.linspace(0, 0.5, len(xs))[x_i]))
+#                
+#            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
+#            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
+#            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
+#            writer.append_data(image)
+#            writer.append_data(image)
+#
+#        #image = imageio.imread(filename)
+#        #writer.append_data(image)
+#    
+#    return gif_file_path
 
 # <markdowncell>
 
@@ -479,13 +484,16 @@ def gif_with_xs(xs, embeddings, file_path=None):
 
 # <codecell>
 
-if __NB_DIMS__ == 3:
-    joint_positions = add_third_dimension(get_data())
-else:
-    joint_positions = add_third_dimension(get_data())
+def get_only_first_legs(joint_positions):
+    return joint_positions[:, list(range(len(LEGS) * NB_TRACKED_POINTS)), :]
+
+# <codecell>
+
+joint_positions = get_only_first_legs(add_third_dimension(get_data())[:, :, :__NB_DIMS__])
     
 
-NB_FRAMES = joint_positions.shape[1]
+NB_FRAMES = joint_positions.shape[0]
+__N_INPUT__ = len(LEGS) * NB_TRACKED_POINTS
 
 # <codecell>
 
@@ -494,14 +502,18 @@ for leg in LEGS:
 
 # <codecell>
 
-ploting_frames(joint_positions)
+#ploting_frames(joint_positions)
+
+# <codecell>
+
+#joint_positions.shape
 
 # <codecell>
 
 def normalize(joint_positions, using_median=True, to_probability_distr=False):
     # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
     if using_median:
-        applied = np.median(joint_positions.reshape(-1, 3), axis=0)
+        applied = np.median(joint_positions.reshape(-1, __NB_DIMS__), axis=0)
         return joint_positions - applied, applied
     elif to_probability_distr:
         return
@@ -542,6 +554,11 @@ joint_positions, joint_norm_factor = normalize(joint_positions)
 # <codecell>
 
 ploting_frames(joint_positions)
+ploting_frames(joint_positions_raw)
+
+# <codecell>
+
+
 
 # <markdowncell>
 
@@ -747,7 +764,7 @@ config
 
 # <codecell>
 
-def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, mnist, time_series, config):
+def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rate, decay_factor, alpha, beta, gamma, tau, modelpath, save_model, image_like_input, time_series, config):
     """Main method to build a model, train it and evaluate it.
     
     Args:
@@ -762,18 +779,24 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
         modelpath (path): Path for the model checkpoints.
         save_model (bool): Indicates if the model should be saved after training and evaluation.
         
+        
     Returns:
         dict: Results of the evaluation (NMI, Purity, MSE).
     """
     print(f"running with config: {config}")
-    if config['mnist']:
+    ## TODO
+    #input_shape: e.g. (15, 1)  for flat data (flattened tabular)
+    #                  (28, 28, 3) for image like data
+   
+    if config['image_like_input']:
+        raise NotImplementedError
         input_length = __NB_DIMS__
-        input_channels = 19
+        input_channels = __N_INPUT__
         x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
     else:
         input_length = 1
-        input_channels = 19 * __NB_DIMS__
-        x = tf.placeholder(tf.float32, shape=[None, input_channels])
+        input_channels = __N_INPUT__ * __NB_DIMS__
+        x = tf.placeholder(tf.float32, shape=[None, input_channels]) 
         
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
 
@@ -781,7 +804,7 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 
     model = somvae_model.SOMVAE(inputs=x, latent_dim=latent_dim, som_dim=som_dim, learning_rate=lr_val, decay_factor=decay_factor,
             input_length=input_length, input_channels=input_channels, alpha=alpha, beta=beta, gamma=gamma,
-            tau=tau, mnist=mnist)
+            tau=tau, mnist=image_like_input)
 
     test_losses, train_losses, test_losses_reconstruction = train_model(model, x, lr_val, generator=data_generator, **extract_args(config, train_model))
 
@@ -859,7 +882,7 @@ config = {
     "data_set": "MNIST_data",
     "save_model": False,
     "time_series": False,
-    "mnist": False,
+    "image_like_input": False,
     "loss_weight_encoding": 1.0,
     "loss_weight_embedding": 1.0
 }
@@ -876,7 +899,7 @@ pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 # <codecell>
 
 # reshaping the data, the selection is there to be sure
-reshaped_joint_position = joint_positions[:,:,:__NB_DIMS__].reshape(-1, 19 * __NB_DIMS__)
+reshaped_joint_position = joint_positions[:,:,:__NB_DIMS__].reshape(-1, __N_INPUT__ * __NB_DIMS__)
 
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction
@@ -886,6 +909,7 @@ scaler = MinMaxScaler()
 # <codecell>
 
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
+# train - test split
 nb_of_data_points = int(joint_positions.shape[0] * 0.7)
 
 data_train = scaler.fit_transform(reshaped_joint_position[:nb_of_data_points])
@@ -920,10 +944,17 @@ tf.reset_default_graph()
 _args = inspect.getfullargspec(train_and_evaluate_model).args
 res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:config[k] for k in _args if k in config}, **data, **{"config": config}})
 
-reconstructed_from_encoding =  scaler.inverse_transform(res[3]).reshape(-1, 19, 2)
-reconstructed_from_encoding_val = scaler.inverse_transform(res_val[3]).reshape(-1, 19, 2)
-reconstructed_from_embedding = scaler.inverse_transform(res[1]).reshape(-1, 19, 2)
-reconstructed_from_embedding_val = scaler.inverse_transform(res_val[1]).reshape(-1, 19, 2)
+
+def _reverse_to_original_shape_(pos_data, input_shape=None):
+    if input_shape is None:
+        input_shape = (__N_INPUT__, __NB_DIMS__)
+        
+    return scaler.inverse_transform(pos_data).reshape(-1, *(input_shape))
+
+reconstructed_from_embedding_train =  _reverse_to_original_shape_(res[1])
+reconstructed_from_embedding_val   =  _reverse_to_original_shape_(res_val[1])
+reconstructed_from_encoding_train  =  _reverse_to_original_shape_(res[3])
+reconstructed_from_encoding_val    =  _reverse_to_original_shape_(res_val[3])
 
 # <codecell>
 
@@ -934,39 +965,27 @@ plot_cluster_assignment_over_time(res[2])
 # <codecell>
 
 plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                 np.vstack((reconstructed_from_encoding, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+                                                 np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
 plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                 np.vstack((reconstructed_from_embedding, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
+                                                 np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
-((joint_positions[:len(res[3])][:,:,:2] - reconstructed_from_encoding) ** 2).mean()
-((joint_positions[:len(res[3])][:,:,:2] - reconstructed_from_embedding) ** 2).mean()
+print(((joint_positions[:len(res[3])] - reconstructed_from_encoding_train) ** 2).mean())
+print(((joint_positions[:len(res[3])] - reconstructed_from_embedding_train) ** 2).mean())
+print(((joint_positions[len(res[3]):] - reconstructed_from_encoding_val) ** 2).mean())
+print(((joint_positions[len(res[3]):] - reconstructed_from_embedding_val) ** 2).mean())
 
 # <codecell>
 
 stop
 
-# <codecell>
-
-
-
 # <markdowncell>
 
 # ## cool videos 
-
-# <codecell>
-
-def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor, to_2d=True):
-    # TODO add reshaping and other steps here as well
-    _x = add_third_dimension(x) + normalisation_term 
-    if to_2d:
-        return _x[:,:,:2]
-    else:
-        return _x
 
 # <codecell>
 
@@ -1067,13 +1086,17 @@ def _add_frame_and_embedding_id_(frame, emb_id, frame_id):
 
 
 def cluster_videos(cluster_assignments, max_clusters=10):
-    paths = sorted([(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()], key=lambda x: len(x[0], reverse=True)
-    paths = [create_gif_of_sequence(fs, cluster_id) for fs, cluster_id in paths[:max_clusters]]
+    _t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
+    paths = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+    paths = [create_gif_of_sequence(*p) for p in paths[:max_clusters]]
     return paths 
 
 # <codecell>
 
-def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
+def _float_to_int_color_(colors):
+    return (np.array(colors) * 255).astype(np.int)
+    
+def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
     
     Args:
@@ -1091,12 +1114,14 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
     
     # TODO this should be done globally
     cluster_ids = np.unique(embeddings)
-    cluster_colours = dict(zip(cluster_ids, 
-                               (np.array(sns.color_palette('cubehelix', n_colors=len(cluster_ids))) * 255).astype(np.int)))
+    cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
     
     image_height, image_width, _ = cv2.imread(get_frame_path(0)).shape
     lines_pos = ((np.array(range(len(embeddings))) / len(embeddings)) * image_width).astype(np.int)
     
+    _train_test_split_marker = np.int(n_train / len(embeddings) * image_width)
+    _train_test_split_marker_colours = _float_to_int_color_(sns.color_palette(n_colors=2)).tolist()
+        
     def pipeline(frame, frame_id, embedding_id):
         # kinda ugly... note that some variables are from the upper "frame"
         f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
@@ -1106,12 +1131,25 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
                                    img=f,
                                    colors=lighten_int_colors(skeleton.colors, 
                                                              amount=np.linspace(0, 0.5, len(xs))[x_i]))
+            
+        if n_train == frame_id:
+            cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
+        else:
+            cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
+        
+        f = cv2.putText(img=np.copy(f), 
+                        text='train' if frame_id < n_train else 'test',
+                        org=(_train_test_split_marker, image_height - 40),
+                        fontFace=1,
+                        fontScale=1,
+                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1], 
+                        thickness=1)
                 
         for line_idx, l in enumerate(lines_pos):
             if line_idx == frame_id:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colours[embeddings[line_idx]].tolist(), 2) 
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[embeddings[line_idx]].tolist(), 2) 
             else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colours[embeddings[line_idx]].tolist(), 1) 
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[embeddings[line_idx]].tolist(), 1) 
         
         return f
         
@@ -1122,12 +1160,21 @@ def comparision_video_of_reconstruction(xs, embeddings, file_path=None):
 
 # <codecell>
 
-# full video
-_p = comparision_video_of_reconstruction((joint_positions_raw[:,:,:2], 
-                  reverse_pos_pipeline(reconstructed_from_encoding),
-                  reverse_pos_pipeline(reconstructed_from_embedding)), 
-                 embeddings=res[2])
+def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor):
+    """TODO This is again pretty shitty... ultra hidden global variable"""
+    return x + normalisation_term 
 
+# <codecell>
+
+joint_pos_embedding = np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val))
+joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val))
+
+# <codecell>
+
+# full video
+_p = comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_pos_encoding, joint_pos_encoding, joint_pos_embedding]],
+                                         embeddings=np.hstack((res[2], res_val[2])),
+                                         n_train=res[2].shape[0])
 
 display_video(_p)
 
@@ -1144,10 +1191,6 @@ display_video(cluster_vids[idx])
 
 idx = 1
 display_video(cluster_vids[idx])
-
-# <codecell>
-
-idx = 4
 
 # <codecell>
 
