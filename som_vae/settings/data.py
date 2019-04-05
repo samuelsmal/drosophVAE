@@ -83,7 +83,11 @@ __LABELLED_DATA_RAW__ = [
     ((868, 878), _BehaviorLabel_.GROOM_ANT,  '/180920_aDN_CsCh/Fly2/001_SG1'),
     ((879, 896), _BehaviorLabel_.WALK_BACKW, '/180920_aDN_CsCh/Fly2/001_SG1'),
 
-((0, 100), _BehaviorLabel_.REST, '180920_aDN_CsCh_Fly2002_SG1'),
+    ((  0, 142), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/002_SG1'),
+    ((143, 253), _BehaviorLabel_.GROOM_ANT,  '/180920_aDN_CsCh/Fly2/002_SG1'),
+    ((254, 821), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/002_SG1'),
+    ((822, 899), _BehaviorLabel_.GROOM_ANT,  '/180920_aDN_CsCh/Fly2/002_SG1'),
+
 
 ((0, 100), _BehaviorLabel_.REST, '180920_aDN_CsCh_Fly2003_SG1'),
 
