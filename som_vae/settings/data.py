@@ -114,16 +114,8 @@ __LABELLED_DATA_RAW__ = [
     ((757, 767), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/005_SG1'),
     ((768, 797), _BehaviorLabel_.WALK_BACKW, '/180920_aDN_CsCh/Fly2/005_SG1'),
     ((798, 897), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/005_SG1'),
-
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/001_SG1'),
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/002_SG1'),
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/003_SG1'),
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/004_SG1'),
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/005_SG1'),
  ]
 
-
-__LABELLED_DATA_RAW__ 
 
 LABELLED_DATA = [__LabelledData__._make(i) for i in __LABELLED_DATA_RAW__]
 
