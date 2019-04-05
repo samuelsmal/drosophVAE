@@ -1,11 +1,3 @@
-"""
-Utility functions for the SOM-VAE model
-Copyright (c) 2018
-Author: Vincent Fortuin
-Institution: Biomedical Informatics group, ETH Zurich
-License: MIT License
-"""
-
 import numpy as np
 
 

@@ -255,7 +255,9 @@ class SOMVAE:
 
     @lazy_scope
     def z_q_neighbors(self):
-        """Aggregates the respective neighbors in the SOM for every embedding in z_q."""
+        """Aggregates the respective neighbors in the SOM for every embedding in z_q. 
+        Using a rectangular grid.
+        """
         k_1 = self.k // self.som_dim[1]
         k_2 = self.k % self.som_dim[1]
         k_stacked = tf.stack([k_1, k_2], axis=1)
@@ -322,8 +324,6 @@ class SOMVAE:
                 h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_e)
                 h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
                 x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
-                #x_hat = tf.keras.layers.Dense(self.input_channels)(h_4)
-                #x_hat = tf.reshape(x_hat, [-1, self.input_length, self.input_channels, 1])
         return x_hat
 
 

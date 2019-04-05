@@ -1,478 +1,171 @@
 # -*- coding: utf-8 -*-
 # <nbformat>4</nbformat>
 
-# <markdowncell>
+# <codecell>
 
-# # constants
+__LABELLED_DATA__[0]
 
 # <codecell>
 
-__NB_DIMS__ = 2
-
-LEGS = [0, 1, 2, 5, 6, 7]
-LEGS = [0, 1, 2] #, 5, 6, 7] # since we do not care about the other side
-CAMERA_OF_INTEREST = 1
-NB_OF_AXIS = 2
-NB_TRACKED_POINTS = 5 # per leg, igoring the rest for now
-NB_CAMERAS = 7
-NB_RECORDED_DIMESIONS = 2
-
-FRAMES_PER_SECOND = 100
-NYQUIST_FREQUENCY_OF_MEASUREMENTS = FRAMES_PER_SECOND / 2
-
-FLY = "181220_Rpr_R57C10_GC6s_tdTom"
-
-POSE_DATA_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/pose_result__mnt_NAS_SVB_181220_Rpr_R57C10_GC6s_tdTom_001_coronal_behData_images_renamed.pkl".format(fly_id=FLY)
-POSE_FRAME_PATH = "/ramdya-nas/SVB/{fly_id}/001_coronal/behData/images_renamed/camera_{{camera_id}}_img_{{frame_id:06d}}.jpg".format(fly_id=FLY)
-
-SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_gif_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id=FLY)
-
-# <markdowncell>
-
-# # imports & functions
-
-# <markdowncell>
-
-# ## imports
+__LABELLED_DATA__[0].path
 
 # <codecell>
 
+from pathlib import Path
+_p = Path(__POSE_DATA_BASE_PATH__.format(experiment_id=__LABELLED_DATA__[0].path))
+
+# <markdowncell>
+
+# # imports
+
+# <codecell>
+
+from importlib import reload
+from collections import namedtuple
+import inspect
+from itertools import groupby
+from datetime import date
+from functional import seq
+from functools import reduce, partial
+from glob import glob
+import datetime
+import logging
+import matplotlib.pyplot as plt
 import numpy as np
+import os
+import pandas as pd
+import pathlib
+import pickle
+import re
+import seaborn as sns
+import shutil
+import skimage
+from skimage import io
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import tensorflow as tf
 from tensorflow.examples.tutorials.mnist import input_data
-import pandas as pd
-
-from sklearn.metrics import mean_squared_error
 from tqdm import tqdm, trange
-import pathlib
-import logging
-import datetime
-from datetime import date
-import os
 import uuid
-from glob import glob
-import shutil
-import pickle
-import skimage
-from functools import reduce
-from skimage import io
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# for creating the gifs
-import PIL
-import imageio
-import cv2
 from IPython import display
 
 #%matplotlib inline
+#plt.style.use("dark_background")
 
-from importlib import reload
-import inspect
-from itertools import groupby
 import sys
 sys.path.append('/home/samuel/')
-
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 from drosophpose.GUI import skeleton
 
 from som_vae import somvae_model
 from som_vae.utils import *
 
-# <codecell>
-
-plt.style.use("light_background")
-
-# <markdowncell>
-
-# ## utils
-
-# <codecell>
-
-def extract_args(config, function):
-    return {k:config[k] for k in inspect.getfullargspec(function).args if k in config}
-
-# <codecell>
-
-def chunks(l, n):
-    """Yield successive n-sized chunks from l. Use it to create batches."""
-    for i in range(0, len(l), n):
-        yield l[i:i + n]
-
-# <codecell>
-
-def convert_bytes(num):
-    """
-    this function will convert bytes to MB.... GB... etc
-    """
-    for x in ['bytes', 'KB', 'MB', 'GB', 'TB']:
-        if num < 1024.0:
-            return "%3.1f %s" % (num, x)
-        num /= 1024.0
-
-
-def file_size(file_path):
-    """
-    this function will return the file size
-    """
-    if os.path.isfile(file_path):
-        file_info = os.stat(file_path)
-        return convert_bytes(file_info.st_size)
-
-# <codecell>
-
-def fix_layout(width:int=95):
-    from IPython.core.display import display, HTML
-    display(HTML("<style>.container { width:" + str(width) + "% !important; }</style>"))
+from som_vae.helpers.misc import extract_args, chunks, foldl
+from som_vae.helpers.jupyter import fix_layout, display_video
+from som_vae.settings import data, config
+from som_vae.helpers import video
+from som_vae import preprocessing
+from som_vae.helpers.logging import enable_logging
     
 fix_layout()
-
-# <markdowncell>
-
-# ## data loading helpers
+enable_logging()
 
 # <codecell>
 
-def _load_data_(path=POSE_DATA_PATH):
-    with open(POSE_DATA_PATH, 'rb') as f:
-        pose_data_raw = pickle.load(f)
-        return pose_data_raw['points2d']
+data.LABELLED_DATA[0].path
 
 # <codecell>
 
-def _check_shape_(joint_positions):
-    """ should be (7, <nb frames>, 38, 2)
-    7 for the images, some should be 0 because it didn't record the images for these points
-    1000 for the nb of frames
-    38 for the features (some for the legs, antennae ...) check skeleton.py in semigh's code
-    2 for the pose dimensions
-    """
-    s = joint_positions.shape
+config.PATH_EXPERIMENT_IMAGE
+
+# <codecell>
+
+path_experiment = config.PATH_EXPERIMENT.format(base_path=config.__PATH_TO_DATA__,
+                                                study_id=config.STUDY_ID,
+                                                fly_id=config.FLY_ID,
+                                                experiment_id=config.EXPERIMENT_ID)
+
+path_experiment_images = pathlib.Path(config.PATH_EXPERIMENT_IMAGE.format(base_experiment_path=path_experiment,
+                                                             camera_id=config.CAMERA_OF_INTEREST,
+                                                             image_id=0)).parent
+
+# <codecell>
+
+Frame = namedtuple('Frame', 'frame_id, path, camera_id, frame')
+
+def _to_frame_(path, camera_id=config.CAMERA_OF_INTEREST):
+    m = re.match('camera_' + str(camera_id) + '_img_(\d{6})\.jpg', path.name)
     
-    if s[0] != NB_CAMERAS or s[2] != len(skeleton.tracked_points) or s[3] != NB_RECORDED_DIMESIONS:
-        raise ValueError(f"shape of pose data is wrong, it's {joint_positions.shape}")
-        
-    return joint_positions 
-
-def _crude_value_check_(joint_positions):
-    if np.sum(joint_positions == 0) == np.product(joint_positions.shape):
-        raise ValueError('not every value should be zero')
-        
-    return joint_positions
-
-def _simple_checks_(data):
-    return reduce(lambda acc, el: el(acc), [_check_shape_, _crude_value_check_], data)
-
-# <codecell>
-
-def _get_camera_of_interest_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
-    return joint_positions[CAMERA_OF_INTEREST]
-
-def _get_visible_legs_(joint_positions, camera_idx=CAMERA_OF_INTEREST):
-    idx_visible_joints = [skeleton.camera_see_joint(CAMERA_OF_INTEREST, j) for j in range(len(skeleton.tracked_points))]
-    return joint_positions[:, idx_visible_joints, :]
-
-# <codecell>
-
-def get_data(path=POSE_DATA_PATH):
-    fns = [_load_data_, _simple_checks_, _get_camera_of_interest_, _get_visible_legs_]
-    return reduce(lambda acc, el: el(acc), fns, path)
-
-# <codecell>
-
-def add_third_dimension(joint_positions):
-    # just add a z-axis
-    # look up np.pad...
-    # assumes that the positional data is in the last axis
-    paddings = [[0, 0] for i in joint_positions.shape]
-    paddings[-1][1] = 1
-
-    return np.pad(joint_positions, paddings, mode='constant', constant_values=0)
-
-# <markdowncell>
-
-# ## plotting helpers
-
-# <codecell>
-
-def _get_feature_name_(tracking_id):
-    return str(skeleton.tracked_points[tracking_id])[len('Tracked.'):]
-
-def _get_feature_id_(leg_id, tracking_point_id):
-    if leg_id < 3:
-        return leg_id * 5 + tracking_point_id
+    if m is not None:
+        return int(m[1]), path, camera_id, cv2.imread(str(path))
     else:
-        return (leg_id - 5) * 5 + tracking_point_id + 19
+        return None
     
-def _get_leg_name_(leg_id):
-    __LEG_NAMES__ = ['foreleg', 'middle leg', 'hind leg']
-    return __LEG_NAMES__[leg_id]
-
-def ploting_frames(joint_positions):
-    for leg in LEGS:
-        fig, axs = plt.subplots(1, NB_OF_AXIS, sharex=True, figsize=(20, 10))
-        for tracked_point in range(NB_TRACKED_POINTS):
-            for axis in range(NB_OF_AXIS):
-                cur_ax = axs[axis]
-                cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
-                if axis == 0:
-                    cur_ax.set_ylabel('x pos')
-                else:
-                    cur_ax.set_ylabel('y pos')
-                cur_ax.legend(loc='upper right')
-                cur_ax.set_xlabel('frame')
-
-        #plt.xlabel('frame')
-        #plt.legend(loc='lower right')
-        plt.suptitle(_get_leg_name_(leg))
-
-# <codecell>
-
-def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, validation_cut_off=None):
-    for leg in LEGS:
-        fig, axs = plt.subplots(1, NB_OF_AXIS * 2, sharex=True, figsize=(25, 10))
-        for axis in range(NB_OF_AXIS):
-            cur_ax = axs[axis * 2]
-            rec_ax = axs[axis * 2 + 1]
-            
-            if validation_cut_off is not None:
-                for a in [cur_ax, rec_ax]:
-                    a.axvline(validation_cut_off, label='validation cut off', linestyle='--')
-                    
-            for tracked_point in range(NB_TRACKED_POINTS):
-                cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
-                rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
-                cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
-                if axis == 0:
-                    cur_ax.set_ylabel('x pos')
-                    rec_ax.set_ylabel('x pos')
-                else:
-                    cur_ax.set_ylabel('y pos')
-                    rec_ax.set_ylabel('y pos')
-                cur_ax.legend(loc='upper right')
-                cur_ax.set_xlabel('frame')
-                rec_ax.legend(loc='upper right')
-                rec_ax.set_xlabel('frame')
-                cur_ax.set_title('original data')
-                rec_ax.set_title('reconstructed data')
-                
-
-                
-        #plt.xlabel('frame')
-        #plt.legend(loc='lower right')
-        plt.suptitle(_get_leg_name_(leg))
-
-# <codecell>
-
-def plot_losses(losses, legend=None):
-    plt.figure(figsize=(15, 8))
-    if legend is None:
-        legend = ['train', 'test', 'test_recon'] 
-    plt.figure()
-    for l in losses:
-        plt.plot(l)
-
-    plt.legend(legend)
-    plt.xlabel('epoch')
-    plt.title('loss')
-
-# <codecell>
-
-def plot_latent_frame_distribution(latent_assignments, nb_bins):
-    plt.figure()
-    plt.hist(latent_assignments, bins=nb_bins)
-    plt.title('distribution of latent-space-assignments')
-    plt.xlabel('latent-space')
-    plt.ylabel('nb of frames in latent-space')
-
-# <codecell>
-
-def plot_cluster_assignment_over_time(cluster_assignments):
-    plt.figure()
-    plt.plot(cluster_assignments)
-    plt.title("cluster assignments over time")
-    plt.ylabel("index of SOM-embeddings")
-    plt.xlabel("frame")
-
-# <markdowncell>
-
-# ## video and gif helpers
-
-# <codecell>
-
-import io
-import base64
-from IPython.display import HTML
-
-def display_video(path):
-    video = io.open(path, 'r+b').read()
-    encoded = base64.b64encode(video)
-    return HTML(data='''<video alt="test" controls>
-                    <source src="data:video/mp4;base64,{0}" type="video/mp4" />
-                 </video>'''.format(encoded.decode('ascii')))
-
-# <codecell>
-
-import matplotlib.colors as mc
-import colorsys
-
-
-def lighten_color(color, amount=0.5):
-    """
-    Lightens the given color by multiplying (1-luminosity) by the given amount.
-    Input can be matplotlib color string, hex string, or RGB tuple.
+def get_frames(path, camera_id=config.CAMERA_OF_INTEREST):
+    # parent is important here
+    _t = seq(pathlib.Path(path).iterdir())\
+        .map(partial(_to_frame_, camera_id=camera_id))\
+        .filter(lambda x: x is not None)\
+        .map(Frame._make)
     
-    Taken from here: https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib#answer-49601444
-
-    Examples:
-    >> lighten_color('g', 0.3)
-    >> lighten_color('#F034A3', 0.6)
-    >> lighten_color((.3,.55,.1), 0.5)
-    """
-    try:
-        c = mc.cnames[color]
-    except:
-        c = color
-    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
-    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
-
-
-def lighten_int_colors(cs, amount=0.5):
-    return [(np.array(lighten_color(np.array(c) / 255, amount=amount)) * 255).astype(np.int).tolist() for c in cs]
-
-def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickness=None,
-                       draw_limbs=None, circle_color=None):
-    """
-    taken from https://github.com/NeLy-EPFL/drosoph3D/blob/master/GUI/plot_util.py
-    """
-    if colors is None:
-        colors = skeleton.colors
-    if thickness is None:
-        thickness = [2] * 10
-    if draw_joints is None:
-        draw_joints = np.arange(skeleton.num_joints)
-    if draw_limbs is None:
-        draw_limbs = np.arange(skeleton.num_limbs)
-    for joint_id in range(pts.shape[0]):
-        limb_id = skeleton.get_limb_id(joint_id)
-        if (pts[joint_id, 0] == 0 and pts[joint_id, 1] == 0) or limb_id not in draw_limbs or joint_id not in draw_joints:
-            continue
-
-        color = colors[limb_id]
-        r = 5 if joint_id != skeleton.num_joints - 1 and joint_id != ((skeleton.num_joints // 2) - 1) else 8
-        cv2.circle(img, (pts[joint_id, 0], pts[joint_id, 1]), r, color, -1)
-
-        # TODO replace this with skeleton.bones
-        if (not skeleton.is_tarsus_tip(joint_id)) and (not skeleton.is_antenna(
-                joint_id)) and (joint_id != skeleton.num_joints - 1) and (
-                joint_id != (skeleton.num_joints // 2 - 1)) and (not (
-                pts[joint_id + 1, 0] == 0 and pts[joint_id + 1, 1] == 0)):
-            cv2.line(img, (pts[joint_id][0], pts[joint_id][1]), (pts[joint_id + 1][0], pts[joint_id + 1][1]),
-                     color=color,
-                     thickness=thickness[limb_id])
-
-    if circle_color is not None:
-        img = cv2.circle(img=img, center=(img.shape[1]-20, 20), radius=10, color=circle_color, thickness=-1)
-
-    return img
+    return _t
 
 # <codecell>
 
-#def gif_with_x(x, embeddings, file_path=None):
-#    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-#    
-#    Args:
-#        embeddings: [<embeddings_id>]    
-#            assumed to be in sequence with `get_frame_path` function.
-#        file_path: <str>, default: SEQUENCE_GIF_PATH  
-#            file path used to get 
-#    Returns:
-#        <str>                            the file path under which the gif was saved
-#    """
-#    if file_path is None:
-#        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video", end_frame="with-embeddings")
-#    else:
-#        gif_file_path = file_path
-#
-#    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-#    
-#    with imageio.get_writer(gif_file_path, mode='I') as writer:
-#        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-#        last = -1
-#        for i, (filename, emb_id) in enumerate(filenames):
-#            frame = 2*(i**0.5)
-#            if round(frame) > round(last):
-#                last = frame
-#            else:
-#                continue
-#                
-#            image = cv2.imread(filename)  
-#            
-#            
-#            # adding 
-#            image = plot_drosophila_2d(x[i].astype(np.int), img=image)
-#                
-#            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
-#            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-#            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-#            writer.append_data(image)
-#            writer.append_data(image)
-#
-#        #image = imageio.imread(filename)
-#        #writer.append_data(image)
-#    
-#    return gif_file_path
-#
-#
-#def gif_with_xs(xs, embeddings, file_path=None):
-#    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-#    
-#    Args:
-#        xs: [<pos data: [frames, limb, dimensions]>]
-#            will plot all of them, the colors get lighter
-#        embeddings: [<embeddings_id>]    
-#            assumed to be in sequence with `get_frame_path` function.
-#        file_path: <str>, default: SEQUENCE_GIF_PATH  
-#            file path used to get 
-#    Returns:
-#        <str>                            the file path under which the gif was saved
-#    """
-#    if file_path is None:
-#        # arguments for the path are missused, just FYI
-#        gif_file_path = SEQUENCE_GIF_PATH.format(begin_frame="full-video-x_x-hat", end_frame="with-embeddings")
-#    else:
-#        gif_file_path = file_path
-#
-#    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-#    
-#    with imageio.get_writer(gif_file_path, mode='I') as writer:
-#        filenames =  [(get_frame_path(i), emb_id) for i, emb_id in enumerate(embeddings)]
-#        last = -1
-#        for i, (filename, emb_id) in enumerate(filenames):
-#            frame = 2*(i**0.5)
-#            if round(frame) > round(last):
-#                last = frame
-#            else:
-#                continue
-#                
-#            image = cv2.imread(filename)  
-#            
-#            
-#            # adding 
-#            for x_i, x in enumerate(xs):
-#                image = plot_drosophila_2d(x[i].astype(np.int), img=image, colors=lighten_int_colors(skeleton.colors, amount=np.linspace(0, 0.5, len(xs))[x_i]))
-#                
-#            cv2.line(image, (0, emb_id), (10, emb_id), (0, 255, 0), 2)
-#            image = cv2.putText(img=np.copy(image), text=f"{emb_id:0>3}", org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=(255, 255, 255), thickness=2)
-#            image = cv2.putText(img=np.copy(image), text=f"fr: {i:0>4}", org=(0, (image.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-#            writer.append_data(image)
-#            writer.append_data(image)
-#
-#        #image = imageio.imread(filename)
-#        #writer.append_data(image)
-#    
-#    return gif_file_path
+reload(video)
+reload(config)
+
+# <codecell>
+
+
+
+# <codecell>
+
+_t = seq(get_frames(path_experiment_images))
+
+# <codecell>
+
+config.EXPERIMENT_VIDEO_PATH.format(experiment_id=)
+
+# <codecell>
+
+video._save_frames_('' _t.map(video._add_frame_and_embedding_id_).to_list()
+
+# <codecell>
+
+_t
+
+# <codecell>
+
+seq(_t).map(len)
+
+# <codecell>
+
+import cv2
+
+# <codecell>
+
+
+
+# <codecell>
+
+
+
+# <codecell>
+
+cv.imread(video.get_frame_path(i))
+
+# <codecell>
+
+expermiment_id = '180920_aDN_CsCh/Fly2/001_SG1'
+
+# <codecell>
+
+
+
+# <codecell>
+
+list(pathlib.Path(config.POSE_DATA_BASE_PATH.format(experiment_id=expermiment_id)).iterdir())
 
 # <markdowncell>
 
@@ -480,81 +173,22 @@ def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickn
 
 # <codecell>
 
-def get_only_first_legs(joint_positions):
-    return joint_positions[:, list(range(len(LEGS) * NB_TRACKED_POINTS)), :]
-
-# <codecell>
-
-joint_positions = get_only_first_legs(add_third_dimension(get_data())[:, :, :__NB_DIMS__])
-    
+joint_positions = foldl(preprocessing.get_data(), 
+                        preprocessing.add_third_dimension,
+                        preprocessing.get_only_first_legs)[:, :, :config.NB_DIMS]
 
 NB_FRAMES = joint_positions.shape[0]
-__N_INPUT__ = len(LEGS) * NB_TRACKED_POINTS
-
-# <codecell>
-
-for leg in LEGS:
-    print("{0:.3}% of the data for leg {1} is 0".format((joint_positions[:, leg:leg+5, :2] == 0).mean(), leg))
-
-# <codecell>
-
-#ploting_frames(joint_positions)
-
-# <codecell>
-
-#joint_positions.shape
-
-# <codecell>
-
-def normalize(joint_positions, using_median=True, to_probability_distr=False):
-    # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
-    if using_median:
-        applied = np.median(joint_positions.reshape(-1, __NB_DIMS__), axis=0)
-        return joint_positions - applied, applied
-    elif to_probability_distr:
-        return
-    else:
-        raise NotImplementedError
-
-# <codecell>
-
-def normalize_ts(time_series, ax=0):
-    # for shape (frame,feat)
-    eps = 0.0001
-    print("shapes:", np.shape(np.transpose(time_series)), np.shape(np.mean(np.transpose(time_series), axis=ax)))
-#     n_time_series = (np.transpose(time_series) - np.mean(np.transpose(time_series), axis=ax))/(np.std(np.transpose(time_series), axis=ax) + eps)
-    norm = np.sum(np.transpose(time_series), axis=ax); norm = np.transpose(norm) #shape = 1,frames
-    n_time_series = np.transpose(time_series) / np.sum(np.transpose(time_series), axis=ax)
-    n_time_series = np.transpose(n_time_series)
-#     n_time_series = np.zeros(shape=np.shape(time_series))
-#     for i in range(np.shape(time_series)[1]):
-#         n_time_series[:,i] = (time_series[:,i] - np.mean(time_series[:,i])) / (np.std(time_series[:,i]) + eps)
-    return n_time_series, norm
-
-
-def normalize_pose(points3d, median3d=False):
-    # normalize experiment
-    if median3d:
-        points3d -= np.median(points3d.reshape(-1, 3), axis=0)
-    else:
-        for i in range(np.shape(points3d)[1]): #frames
-            for j in range(np.shape(points3d)[2]): #xyz
-                points3d[:,i,j] = normalize_ts(points3d[:,i,j]) 
-    return points3d
+__N_INPUT__ = len(config.LEGS) * config.NB_TRACKED_POINTS
 
 # <codecell>
 
 joint_positions_raw = joint_positions.copy()
-joint_positions, joint_norm_factor = normalize(joint_positions)
+joint_positions, joint_norm_factor = preprocessing.normalize(joint_positions)
 
 # <codecell>
 
-ploting_frames(joint_positions)
-ploting_frames(joint_positions_raw)
-
-# <codecell>
-
-
+plots.ploting_frames(joint_positions)
+plots.ploting_frames(joint_positions_raw)
 
 # <markdowncell>
 
@@ -650,11 +284,7 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     summaries = tf.summary.merge_all()
     
-    session_config = tf.ConfigProto()
-    session_config.gpu_options.allow_growth = True  
-    session_config.gpu_options.polling_inactive_delay_msecs = 10
-    
-    with tf.Session(config=session_config) as sess:
+    with tf.Session(config=__TF_DEFAULT_SESSION_CONFIG__) as sess:
         sess.run(tf.global_variables_initializer())
         patience_count = 0
         train_losses = []
@@ -682,12 +312,15 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
                     break
                 for i in range(num_batches):
                     batch_data = next(train_gen)
+                    
                     if i%100 == 0:
                         train_loss, summary = sess.run([model.loss, summaries], feed_dict={x: batch_data})
                         train_writer.add_summary(summary, tf.train.global_step(sess, model.global_step))
                         train_losses += [train_loss]
+                        
                     train_step_SOMVAE.run(feed_dict={x: batch_data, lr_val:learning_rate})
                     train_step_prob.run(feed_dict={x: batch_data, lr_val:learning_rate*100})
+                    
                     if interactive:
                         pbar.set_postfix(epoch=epoch, train_loss=train_loss, test_loss=test_loss, refresh=False)
                         pbar.update(1)
@@ -753,10 +386,6 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels=None, tf_sessio
 #    results["optimization_target"] = 1 - test_nmi
 
     return results, x_hat_embedding, cluster_assignments, x_hat_encoding, x_hat_latent
-
-# <codecell>
-
-config
 
 # <codecell>
 
@@ -978,220 +607,11 @@ print(((joint_positions[len(res[3]):] - reconstructed_from_embedding_val) ** 2).
 
 # ## cool videos 
 
-# <markdowncell>
-
-# ### code
-
-# <codecell>
-
-__FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
-__FRAME_BAR_MARKER__ = (0, 255, 255)
-
-def create_gif_of_sequence(sequence, cluster_id, cluster_colors, n_frames_for_scaling=NB_FRAMES):
-    # TODO this is a bit shitty...
-    gif_file_path = _get_and_check_file_path_((sequence[0], sequence[-1]))
-                                              
-    frame_paths =  [(get_frame_path(i), i) for i in sequence]
-    last_frame_id = frame_paths[0][1] - 1
-    
-    image_width = cv2.imread(frame_paths[0][0]).shape[1]
-    
-    lines_pos = (np.array(sequence) / n_frames_for_scaling * image_width).astype(np.int).tolist()
-    
-    frames = []
-    for i, (frame_path, frame_id) in enumerate(frame_paths):
-        # adding fr nb to image
-        image = cv2.imread(frame_path)  
-        if last_frame_id + 1 != frame_id:
-            color = (0, 255, 255)
-        else:
-            color = (255, 255, 255)
-
-        last_frame_id = frame_id
-
-        image = cv2.putText(img=np.copy(image), text=str(frame_id), org=(0, image.shape[0] // 2),fontFace=2, fontScale=3, color=color, thickness=2)
-        
-        for line_idx, l in enumerate(lines_pos):
-            if line_idx == i:
-                cv2.line(image, (l, 0), (l, 10), __FRAME_ACTIVE_COLOUR__, 2) 
-            else:
-                cv2.line(image, (l, 0), (l, 10), cluster_colors[cluster_id], 1) 
-        
-        frames += [image]
-                                              
-    _save_frames_(gif_file_path, frames, format='mp4')
-    
-    return gif_file_path
-
-
-# <codecell>
-
-def flatten(listOfLists):
-    return reduce(list.__add__, listOfLists, [])
-    
-    
-def group_by_cluster(data):
-    """Returns the lengths of sequences.
-    Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
-    
-    """
-    sequences = []
-    cur_embedding_idx = 0
-    cur_seq = [0]
-    for i in range(len(data))[1:]:
-        if data[i] == data[cur_embedding_idx]:
-            cur_seq += [i]
-        else:
-            sequences += [(data[cur_embedding_idx], cur_seq)]
-            cur_embedding_idx = i
-            cur_seq = [i]
-            
-    sequences += [(data[cur_embedding_idx], cur_seq)]
-            
-    return {embedding_id: [el[1] for el in emb_frames] for embedding_id, emb_frames in groupby(sorted(sequences, key=lambda x: x[0]), key=lambda x: x[0])}
-
-
-def get_frame_path(frame_id, path=POSE_FRAME_PATH, camera_id=CAMERA_OF_INTEREST):
-    return path.format(camera_id=camera_id, frame_id=frame_id)
-
-def _get_and_check_file_path_(args, template=SEQUENCE_GIF_PATH):
-    gif_file_path = template.format(begin_frame=args[0], end_frame=args[-1])
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    return gif_file_path
-    
-    
-def _save_frames_(file_path, frames, format='GIF', **kwargs):
-    """
-    If format==GIF then fps has to be None, duration should be ~10/60
-    If format==mp4 then duration has to be None, fps should be TODO
-    """
-    if format == 'GIF':
-        _kwargs = {'duration': 10/60}
-    elif format == 'mp4':
-        _kwargs = {'fps': 24}
-        
-    imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
-
-
-def _add_frame_and_embedding_id_(frame, emb_id, frame_id):
-    frame = cv2.putText(img=np.copy(frame), text=f"cluster_id: {emb_id:0>3}", org=(0, frame.shape[0] // 2), fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-    frame = cv2.putText(img=np.copy(frame), text=f"frame_id: {frame_id:0>4}", org=(0, (frame.shape[0] // 2) + 24),fontFace=1, fontScale=2, color=(255, 255, 255), thickness=2)
-    return frame
-
-
-#def cluster_videos(cluster_assignments, cluster_colors, max_clusters=10):
-#    # tuple of: (<all the sequences for the cluster>, <cluster_id>)
-#    _t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
-#    _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
-#    _t = [create_gif_of_sequence(*p, cluster_colors=cluster_colors) for p in _t[:max_clusters]]
-#    
-#    return _t 
-
-# <codecell>
-
-skeleton.colors
-
-# <codecell>
-
-[lighten_int_colors(skeleton.colors, amount=p) for p in np.linspace(1, 0.8, 2)]
-
-# <codecell>
-
-
-
-# <codecell>
-
-
-
-# <codecell>
-
-def _float_to_int_color_(colors):
-    return (np.array(colors) * 255).astype(np.int).tolist()
-    
-def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None, cluster_colors=None, cluster_assignment_idx=None, xs_labels=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-    
-    Args:
-        xs: [<pos data>] list of pos data, of shape: [frames, limb, dimensions] (can be just one, but in an array)
-            will plot all of them, the colors get lighter
-        embeddings: [<embeddings_id>]    
-            assumed to be in sequence with `get_frame_path` function.
-            length of embeddings -> number of frames
-        file_path: <str>, default: SEQUENCE_GIF_PATH  
-            file path used to get 
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    gif_file_path = _get_and_check_file_path_(('video-x_x-hat', 'with-embeddings_cluster_' + str(embeddings[cluster_assignment_idx][0])))
-    
-    if cluster_colors is None:
-        cluster_ids = np.unique(embeddings)
-        cluster_colors = dict(zip(cluster_ids, 
-                                  _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
-        
-    if cluster_assignment_idx is None:
-        cluster_assignment_idx = list(range(embeddings.shape[0]))
-        gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings_cluster_all'))
-    
-    image_height, image_width, _ = cv2.imread(get_frame_path(0)).shape
-    lines_pos = ((np.array(range(NB_FRAMES)) / NB_FRAMES) * image_width)\
-                    .astype(np.int)[cluster_assignment_idx].tolist()
-    
-    
-    _train_test_split_marker = np.int(n_train / NB_FRAMES * image_width)
-    _train_test_split_marker_colours = _float_to_int_color_(sns.color_palette(n_colors=2))
-    
-    _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(xs))]
-        
-    def pipeline(frame, frame_id, embedding_id):
-        # kinda ugly... note that some variables are from the upper "frame"
-        f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
-        
-        # xs are the multiple positional data to plot
-        for x_i, x in enumerate(xs):
-            f = plot_drosophila_2d(x[frame_id].astype(np.int), img=f, colors=_colors_for_pos_data[x_i])
-            
-        
-        # train test split marker
-        if n_train == frame_id:
-            cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
-        else:
-            cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1) 
-        
-        # train / test text
-        f = cv2.putText(img=np.copy(f), 
-                        text='train' if frame_id < n_train else 'test',
-                        org=(_train_test_split_marker, image_height - 40),
-                        fontFace=1,
-                        fontScale=1,
-                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1], 
-                        thickness=1)
-        
-                
-        # cluster assignment bar
-        for line_idx, l in enumerate(lines_pos):
-            if line_idx == frame_id:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 2) 
-            else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 1) 
-        
-        return f
-        
-    frames =  [pipeline(cv2.imread(get_frame_path(i)), i, emb_id) for i, emb_id in enumerate(embeddings[cluster_assignment_idx])]
-    _save_frames_(gif_file_path, frames, format='mp4')
-    
-    return gif_file_path
-
 # <codecell>
 
 def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor):
     """TODO This is again pretty shitty... ultra hidden global variable"""
     return x + normalisation_term 
-
-# <markdowncell>
-
-# ### display
 
 # <codecell>
 
