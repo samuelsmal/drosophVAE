@@ -65,10 +65,10 @@ __LABELLED_DATA_RAW__ = [
     ((150, 230), _BehaviorLabel_.GROOM_ANT,  '/180921_aDN_CsCh/Fly3/001_SG1'),
 
     #((170, 210), _BehaviorLabel_.WALK_BACKW, '/180919_MDN_CsCh/Fly4/005_SG1'),
-    #((210, 600), _BehaviorLabel_.WALK_FORW, '/180919_MDN_CsCh/Fly4/005_SG1'),
-    #((600, 700), _BehaviorLabel_.PUSH_BALL, '/180919_MDN_CsCh/Fly4/005_SG1'),
+    #((210, 600), _BehaviorLabel_.WALK_FORW,  '/180919_MDN_CsCh/Fly4/005_SG1'),
+    #((600, 700), _BehaviorLabel_.PUSH_BALL,  '/180919_MDN_CsCh/Fly4/005_SG1'),
 
-    #((600, 700), _BehaviorLabel_.PUSH_BALL, '/180919_MDN_CsCh/Fly4/005_SG1'),
+    #((600, 700), _BehaviorLabel_.PUSH_BALL,  '/180919_MDN_CsCh/Fly4/005_SG1'),
 
     ((  0, 153), _BehaviorLabel_.WALK_FORW,  '/180920_aDN_CsCh/Fly2/001_SG1'),
     ((154, 240), _BehaviorLabel_.GROOM_ANT,  '/180920_aDN_CsCh/Fly2/001_SG1'),
@@ -97,7 +97,12 @@ __LABELLED_DATA_RAW__ = [
     ((820, 858), _BehaviorLabel_.WALK_FORW,  '/180920_aDN_CsCh/Fly2/003_SG1'),
     ((859, 898), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/003_SG1'),
 
-    ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_CsCh/Fly2/004_SG1'),
+    ((  0, 146), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/004_SG1'),
+    ((147, 234), _BehaviorLabel_.GROOM_ANT,  '/180920_aDN_CsCh/Fly2/004_SG1'),
+    ((235, 656), _BehaviorLabel_.REST,       '/180920_aDN_CsCh/Fly2/004_SG1'),
+    ((656, 820), _BehaviorLabel_.WALK_FORW,  '/180920_aDN_CsCh/Fly2/004_SG1'),
+    ((820, 897), _BehaviorLabel_.WALK_FORW,  '/180920_aDN_CsCh/Fly2/004_SG1'),
+
     ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_CsCh/Fly2/005_SG1'),
 
     ((  0, 100), _BehaviorLabel_.REST, '/180920_aDN_PR/Fly2/001_SG1'),
