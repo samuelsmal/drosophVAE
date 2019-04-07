@@ -5,13 +5,14 @@ import cv2
 import matplotlib.colors as mc
 import imageio
 import colorsys
+import seaborn as sns
 
-from drosophpose.GUI import skeleton
-from som_vae.settings import config
+from som_vae.settings import config, skeleton, data
 
 
 __FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
 __FRAME_BAR_MARKER__ = (0, 255, 255)
+
 
 
 def lighten_color(color, amount=0.5):
@@ -122,12 +123,13 @@ def _save_frames_(file_path, frames, format='GIF', **kwargs):
     elif format == 'mp4':
         _kwargs = {'fps': 24}
 
+    pathlib.Path(file_path).parent.mkdir(parents=True, exist_ok=True)
     imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
 
 
 def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
-    params = {"org": (0, frame.shape[0] // 2), 
-              "fontFace": 1, 
+    params = {"org": (0, frame.shape[0] // 2),
+              "fontFace": 1,
               "fontScale": 2,
               "color": (255, 255, 255),
               "thickness": 2}
@@ -219,3 +221,7 @@ def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None,
     _save_frames_(gif_file_path, frames, format='mp4')
 
     return gif_file_path
+
+
+_BEHAVIOR_COLORS_ = dict(zip(list(data._BehaviorLabel_),
+                             _float_to_int_color_(sns.color_palette(n_colors=len(data._BehaviorLabel_)))))

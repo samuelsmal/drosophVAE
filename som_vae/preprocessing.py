@@ -2,10 +2,10 @@ import logging
 import pickle
 from functools import reduce
 
-from drosophpose.GUI import skeleton
+
 import numpy as np
 
-from som_vae.settings import config
+from som_vae.settings import config, skeleton
 
 def _load_positional_data_(path):
     with open(path, 'rb') as f:

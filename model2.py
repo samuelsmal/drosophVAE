@@ -1,19 +1,6 @@
 # -*- coding: utf-8 -*-
 # <nbformat>4</nbformat>
 
-# <codecell>
-
-__LABELLED_DATA__[0]
-
-# <codecell>
-
-__LABELLED_DATA__[0].path
-
-# <codecell>
-
-from pathlib import Path
-_p = Path(__POSE_DATA_BASE_PATH__.format(experiment_id=__LABELLED_DATA__[0].path))
-
 # <markdowncell>
 
 # # imports
@@ -39,8 +26,9 @@ import pickle
 import re
 import seaborn as sns
 import shutil
-import skimage
-from skimage import io
+import cv2
+#import skimage
+#from skimage import io
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import tensorflow as tf
@@ -53,16 +41,14 @@ from IPython import display
 #plt.style.use("dark_background")
 
 import sys
-sys.path.append('/home/samuel/')
-
-from drosophpose.GUI import skeleton
+#from drosophpose.GUI import skeleton
 
 from som_vae import somvae_model
 from som_vae.utils import *
 
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import data, config
+from som_vae.settings import data, config, skeleton
 from som_vae.helpers import video
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
@@ -72,7 +58,122 @@ enable_logging()
 
 # <codecell>
 
-data.LABELLED_DATA[0].path
+reload(config)
+reload(data)
+reload(video)
+
+# <codecell>
+
+# todo get pickle file
+# todo get images
+
+# <codecell>
+
+data.filter_by_study_and_fly(study_id=config.STUDY_ID, fly_id=config.FLY_ID, labelled_data=data.LABELLED_DATA)
+
+# <codecell>
+
+def get_path_for_image(d, frame_id):
+    base = config.PATH_EXPERIMENT.format(base_path=config.__EXPERIMENT_ROOT__, 
+                                         study_id=d.study_id,
+                                         fly_id=d.fly_id,
+                                         experiment_id=d.experiment_id)
+
+    path_image = config.PATH_EXPERIMENT_IMAGE.format(base_experiment_path=base,
+                                                      camera_id=config.CAMERA_OF_INTEREST)
+    
+    return path_image.format(image_id=frame_id)
+
+# <codecell>
+
+# WIP
+# get all images for each experiment
+experiments_with_images = seq(data.EXPERIMENTS).map(lambda x: (x, [(i, cv2.imread(p)) for i, p in config.images_paths(x)])).to_list()
+
+experiments_with_images[0][1]
+
+# <codecell>
+
+def _n_frames_per_experiment_(labelled_data):
+    return seq(labelled_data)\
+        .flat_map(lambda x: ((data._key_(x), frame_id) for frame_id in range(*x.sequence)))\
+        .count_by_key()
+
+# <codecell>
+
+data.n_frames_per_experiment(data.LABELLED_DATA)
+
+# <codecell>
+
+reload(data)
+reload(config)
+
+# <codecell>
+
+e = data._experiment_(_t)
+
+for s in range(1, 6):
+    base = config.PATH_EXPERIMENT.format(base_path=config.__EXPERIMENT_ROOT__, 
+                                         study_id=e.study_id,
+                                         fly_id=e.fly_id,
+                                         experiment_id=f"{s:0>3}_SG1")
+
+    print(base)
+    print(len([p for p in (pathlib.Path(base) / 'behData/images').iterdir() if 'camera_1' in p.name]))
+
+# <codecell>
+
+images_with_labels
+
+# <codecell>
+
+reload(config)
+reload(data)
+reload(video)
+
+# TODO adapt the file path setting
+_t = data.LABELLED_DATA[0]
+video_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=config.full_experiment_id(_t.study_id, _t.experiment_id, _t.fly_id), begin='full', end='video')
+
+params = {"fontFace": 1,
+          "fontScale": 1,
+          "color": (255, 255, 255),
+          "thickness": 1}
+
+def add_texts(x):
+    frame = cv2.putText(x[1], 
+                        text=f"frame: {x[0]:0>4}: label: {x[2].name}",
+                        org=(0, 12), 
+                        **{**params, 'color': video._BEHAVIOR_COLORS_[x[2]]})
+    # 
+    frame = cv2.putText(frame, 
+                        text=f"{x[3]}",
+                        org=(x[1].shape[1] // 2, 12), 
+                        **params)
+    
+    return frame
+
+frames = seq(data.LABELLED_DATA)\
+  .sorted(key=lambda x: (x.label.value, config.full_experiment_id(study_id=x.study_id, experiment_id=x.experiment_id, fly_id=x.fly_id)))\
+  .flat_map(lambda x: [(frame_id , 
+                        cv2.imread(config.get_path_for_image(x, frame_id)),
+                        x.label,
+                        config.full_experiment_id(study_id=x.study_id, experiment_id=x.experiment_id, fly_id=x.fly_id)) 
+                       for frame_id in range(*x.sequence)])\
+  .map(add_texts)
+
+video._save_frames_(video_path, frames, format='mp4')
+
+
+display_video(video_path)
+
+# <codecell>
+
+
+
+# <codecell>
+
+data.LABELLED_DATA[0]
 
 # <codecell>
 
@@ -118,6 +219,10 @@ reload(config)
 # <codecell>
 
 
+
+# <codecell>
+
+seq(data.LABELLED_DATA).map(data._experiment_).group_by(lambda x: x.key).map(lambda k: k[1][0]).to_list()
 
 # <codecell>
 
