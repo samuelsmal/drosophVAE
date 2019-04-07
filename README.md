@@ -1,3 +1,14 @@
+```
+# Use this to retrieve the images and the positional data
+# You might want to adapt it to certain flys as well
+find <base path to experiment>/180920_aDN_CsCh -name "*.jpg" -o -name "*.pkl" | grep -E "camera_1_img|pose" | xargs cp -t /target/path --parent
+```
+
+```
+rsync -azvh ramdya_lab:/target/path/maybe/without/some/of/the/parents /local/path
+```
+
+# OLD STUFF BELOW FROM FORKED REPO
 # SOM-VAE model
 
 This repository contains a TensorFlow implementation of the self-organizing map variational autoencoder as described in the paper [SOM-VAE: Interpretable Discrete Representation Learning on Time Series](https://arxiv.org/abs/1806.02199).
