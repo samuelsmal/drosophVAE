@@ -196,19 +196,15 @@ joint_positions.shape
 # <codecell>
 
 # TODO for some reason some positions are missing
-frames_idx_with_labels = seq(data.LABELLED_DATA).flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()[:len(joint_positions)]
+frames_idx_with_labels = seq(settings.data.LABELLED_DATA).flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()[:len(joint_positions)]
 frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
 
 # <codecell>
 
-frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
+#frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
+frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
 
 joint_positions = joint_positions[frames_of_interest]
-
-# <codecell>
-
-joint_positions_raw = joint_positions.copy()
-joint_positions, joint_norm_factor = preprocessing.normalize(joint_positions)
 
 # <codecell>
 
@@ -527,10 +523,10 @@ som_vae_config = {
     #"beta": 0.0, #0.9,
     #"gamma": 0.0, #1.8,
     #"tau": 0.0, # 1.4,
-    "alpha": 1.0,          # commit loss
-    "beta": 0.9,           # loss som
-    "gamma": 1.8,          # loss proba
-    "tau": 0.4,            # loss z proba
+    "alpha": 0.0,          # commit loss
+    "beta": 0.0,           # loss som
+    "gamma": 0.0,          # loss proba
+    "tau": 0.0,            # loss z proba
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
@@ -542,7 +538,7 @@ som_vae_config = {
     "time_series": False,
     "image_like_input": False,
     "loss_weight_encoding": 1.0,
-    "loss_weight_embedding": 2.0,
+    "loss_weight_embedding": 0.0,
     "input_channels": joint_positions.shape[1] * config.NB_DIMS
 }
 
@@ -824,6 +820,137 @@ display_video(list(cluster_vids.values())[idx])
 
 idx += 1
 display_video(list(cluster_vids.values())[idx])
+
+# <markdowncell>
+
+# # on latent space
+
+# <codecell>
+
+x_hat_latent_train = res[4]
+x_hat_latent_test  = res_val[4]
+
+# <markdowncell>
+
+# ## t-SNE
+
+# <codecell>
+
+from sklearn.manifold import TSNE
+
+X_embedded = TSNE(n_components=2).fit_transform(x_hat_latent_train)
+
+# <codecell>
+
+training_frames = frames_idx_with_labels[frames_of_interest][:x_hat_latent_train.shape[0]]
+testing_frames = frames_idx_with_labels[frames_of_interest][x_hat_latent_train.shape[0]:]
+seen_labels = training_frames.label.unique()
+
+# <codecell>
+
+_cs = sns.color_palette(n_colors=len(seen_labels))
+
+plt.figure(figsize=(10, 10))
+for idx, l in enumerate(seen_labels):
+    _d = X_embedded[training_frames['label'] == l]
+    plt.scatter(_d[:, 0], _d[:,1], c=_cs[idx], label=l.name, )
+    
+plt.legend()
+plt.title('simple t-SNE on train latent space')
+
+# <markdowncell>
+
+# ## linear model
+
+# <codecell>
+
+y_train = training_frames.label.apply(lambda x: x.value)
+y_test = testing_frames.label.apply(lambda x: x.value)
+
+# <codecell>
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.metrics import confusion_matrix
+from sklearn.utils.multiclass import unique_labels
+
+# <codecell>
+
+mdl = AdaBoostClassifier()
+mdl.fit(x_hat_latent_train, y_train)
+
+y_pred_train = mdl.predict(x_hat_latent_train)
+y_pred_test = mdl.predict(x_hat_latent_test)
+
+# <codecell>
+
+confusion_matrix(y_train, y_pred_train)
+
+# <codecell>
+
+def plot_confusion_matrix(y_true, y_pred, classes,
+                          normalize=False,
+                          title=None,
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if not title:
+        if normalize:
+            title = 'Normalized confusion matrix'
+        else:
+            title = 'Confusion matrix, without normalization'
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred)
+    # Only use the labels that appear in the data
+    #classes = classes[unique_labels(y_true, y_pred)]
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
+    ax.figure.colorbar(im, ax=ax)
+    # We want to show all ticks...
+    ax.set(xticks=np.arange(cm.shape[1]),
+           yticks=np.arange(cm.shape[0]),
+           # ... and label them with the respective list entries
+           xticklabels=classes, yticklabels=classes,
+           title=title,
+           ylabel='True label',
+           xlabel='Predicted label')
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+             rotation_mode="anchor")
+
+    # Loop over data dimensions and create text annotations.
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, format(cm[i, j], fmt),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black")
+    fig.tight_layout()
+    return ax
+
+
+np.set_printoptions(precision=2)
+
+# Plot non-normalized confusion matrix
+plot_confusion_matrix(y_train , y_pred_train, classes=np.array([l.name for l in seen_labels]), 
+                      title='train Confusion matrix, without normalization')
+
+plot_confusion_matrix(y_train , y_pred_train, classes=np.array([l.name for l in seen_labels]),  normalize=True,
+                      title='train Confusion matrix, without normalization')
+
+plot_confusion_matrix(y_test, y_pred_test, classes=np.array([l.name for l in seen_labels]), 
+                      title='test Confusion matrix, without normalization')
+
+plot_confusion_matrix(y_test, y_pred_test, classes=np.array([l.name for l in seen_labels]),  normalize=True,
+                      title='test Confusion matrix, without normalization')
 
 # <codecell>
 
