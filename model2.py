@@ -48,19 +48,13 @@ from som_vae.utils import *
 
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import data, config, skeleton
+from som_vae.settings import config, skeleton
 from som_vae.helpers import video, plots
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
     
 fix_layout()
 enable_logging()
-
-# <codecell>
-
-reload(config)
-reload(data)
-reload(video)
 
 # <markdowncell>
 
@@ -182,8 +176,9 @@ def get_frames(path, camera_id=config.CAMERA_OF_INTEREST):
 # <codecell>
 
 from som_vae.helpers.misc import foldl
+from som_vae import settings
 
-joint_positions = data.EXPERIMENTS\
+joint_positions = settings.data.EXPERIMENTS\
     .map(config.positional_data)\
     .map(preprocessing._simple_checks_)\
     .map(preprocessing._get_camera_of_interest_)\
@@ -193,6 +188,22 @@ joint_positions = data.EXPERIMENTS\
     .to_list()
 
 joint_positions, normalisation_factors = preprocessing.normalize(np.vstack(joint_positions))
+
+# <codecell>
+
+joint_positions.shape
+
+# <codecell>
+
+# TODO for some reason some positions are missing
+frames_idx_with_labels = seq(data.LABELLED_DATA).flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()[:len(joint_positions)]
+frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
+
+# <codecell>
+
+frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
+
+joint_positions = joint_positions[frames_of_interest]
 
 # <codecell>
 
@@ -670,6 +681,10 @@ images_paths_for_experiments = EXPERIMENTS.map(lambda x: (x, config.positional_d
 
 # <codecell>
 
+images_paths_for_experiments = np.array(images_paths_for_experiments)[frames_of_interest]
+
+# <codecell>
+
 def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
@@ -728,6 +743,14 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
                         color=_train_test_split_marker_colours[0 if frame_id < n_train else 1],
                         thickness=1)
 
+        f = cv2.putText(img=f,
+                        text=settings.data._key_(experiment),
+                        org=(0, 20),
+                        fontFace=1,
+                        fontScale=1,
+                        color=(255, 255, 255),
+                        thickness=1)
+        
         # cluster assignment bar
         for line_idx, l in enumerate(lines_pos):
             if line_idx == frame_nb:
