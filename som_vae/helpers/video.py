@@ -1,3 +1,4 @@
+from itertools import groupby
 import pathlib
 import logging
 import numpy as np
@@ -7,6 +8,7 @@ import imageio
 import colorsys
 import seaborn as sns
 
+from som_vae.helpers.misc import flatten
 from som_vae.settings import config, skeleton, data
 
 
@@ -76,10 +78,6 @@ def plot_drosophila_2d(pts=None, draw_joints=None, img=None, colors=None, thickn
     return img
 
 
-def flatten(listOfLists):
-    return reduce(list.__add__, listOfLists, [])
-
-
 def group_by_cluster(data):
     """Returns the lengths of sequences.
     Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
@@ -106,7 +104,7 @@ def get_frame_path(frame_id, path, camera_id):
     return path.format(camera_id=camera_id, frame_id=frame_id)
 
 
-def _get_and_check_file_path_(args, template=config.SEQUENCE_GIF_PATH):
+def _get_and_check_file_path_(args, template=config.EXPERIMENT_VIDEO_PATH):
     gif_file_path = template.format(begin_frame=args[0], end_frame=args[-1])
     pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -138,7 +136,7 @@ def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
        frame = cv2.putText(img=np.copy(frame), text=f"cluster_id: {emb_id:0>3}", **params)
 
     if frame_id is not None:
-       frame = cv2.putText(img=np.copy(frame), text=f"frame_id: {frame_id:0>4}", **{**params, 'org': params['org'] + 24})
+       frame = cv2.putText(img=np.copy(frame), text=f"frame_id: {frame_id:0>4}", **{**params, 'org': (params['org'][0], params['org'][1] + 24)})
 
     return frame
 
@@ -147,7 +145,7 @@ def _float_to_int_color_(colors):
     return (np.array(colors) * 255).astype(np.int).tolist()
 
 
-def comparision_video_of_reconstruction(xs, embeddings, n_train, file_path=None, cluster_colors=None, cluster_assignment_idx=None, xs_labels=None, n_frames=1000):
+def comparision_video_of_reconstruction(xs, embeddings, n_train, experiments, file_path=None, cluster_colors=None, cluster_assignment_idx=None, xs_labels=None, n_frames=1000):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:

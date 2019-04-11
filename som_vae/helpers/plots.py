@@ -1,8 +1,7 @@
 import seaborn
 import matplotlib.pyplot as plt
-from drosophpose.GUI import skeleton
 
-from som_vae.settings import config
+from som_vae.settings import config, skeleton
 
 
 def _get_feature_name_(tracking_id):
@@ -54,7 +53,7 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
                     a.axvline(validation_cut_off, label='validation cut off', linestyle='--')
 
             for tracked_point in range(config.NB_TRACKED_POINTS):
-                cur_ax.plot(joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
+                cur_ax.plot(real_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
                 rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
                 cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
                 if axis == 0:

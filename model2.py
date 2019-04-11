@@ -49,7 +49,7 @@ from som_vae.utils import *
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
 from som_vae.settings import data, config, skeleton
-from som_vae.helpers import video
+from som_vae.helpers import video, plots
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
     
@@ -62,14 +62,9 @@ reload(config)
 reload(data)
 reload(video)
 
-# <codecell>
+# <markdowncell>
 
-# todo get pickle file
-# todo get images
-
-# <codecell>
-
-data.filter_by_study_and_fly(study_id=config.STUDY_ID, fly_id=config.FLY_ID, labelled_data=data.LABELLED_DATA)
+# # playground
 
 # <codecell>
 
@@ -92,38 +87,10 @@ experiments_with_images = seq(data.EXPERIMENTS).map(lambda x: (x, [(i, cv2.imrea
 
 experiments_with_images[0][1]
 
-# <codecell>
-
 def _n_frames_per_experiment_(labelled_data):
     return seq(labelled_data)\
         .flat_map(lambda x: ((data._key_(x), frame_id) for frame_id in range(*x.sequence)))\
         .count_by_key()
-
-# <codecell>
-
-data.n_frames_per_experiment(data.LABELLED_DATA)
-
-# <codecell>
-
-reload(data)
-reload(config)
-
-# <codecell>
-
-e = data._experiment_(_t)
-
-for s in range(1, 6):
-    base = config.PATH_EXPERIMENT.format(base_path=config.__EXPERIMENT_ROOT__, 
-                                         study_id=e.study_id,
-                                         fly_id=e.fly_id,
-                                         experiment_id=f"{s:0>3}_SG1")
-
-    print(base)
-    print(len([p for p in (pathlib.Path(base) / 'behData/images').iterdir() if 'camera_1' in p.name]))
-
-# <codecell>
-
-images_with_labels
 
 # <codecell>
 
@@ -169,18 +136,6 @@ display_video(video_path)
 
 # <codecell>
 
-
-
-# <codecell>
-
-data.LABELLED_DATA[0]
-
-# <codecell>
-
-config.PATH_EXPERIMENT_IMAGE
-
-# <codecell>
-
 path_experiment = config.PATH_EXPERIMENT.format(base_path=config.__PATH_TO_DATA__,
                                                 study_id=config.STUDY_ID,
                                                 fly_id=config.FLY_ID,
@@ -211,79 +166,33 @@ def get_frames(path, camera_id=config.CAMERA_OF_INTEREST):
     
     return _t
 
-# <codecell>
-
-reload(video)
-reload(config)
-
-# <codecell>
-
-
-
-# <codecell>
-
-seq(data.LABELLED_DATA).map(data._experiment_).group_by(lambda x: x.key).map(lambda k: k[1][0]).to_list()
-
-# <codecell>
-
-_t = seq(get_frames(path_experiment_images))
-
-# <codecell>
-
-config.EXPERIMENT_VIDEO_PATH.format(experiment_id=)
-
-# <codecell>
-
-video._save_frames_('' _t.map(video._add_frame_and_embedding_id_).to_list()
-
-# <codecell>
-
-_t
-
-# <codecell>
-
-seq(_t).map(len)
-
-# <codecell>
-
-import cv2
-
-# <codecell>
-
-
-
-# <codecell>
-
-
-
-# <codecell>
-
-cv.imread(video.get_frame_path(i))
-
-# <codecell>
-
-expermiment_id = '180920_aDN_CsCh/Fly2/001_SG1'
-
-# <codecell>
-
-
-
-# <codecell>
-
-list(pathlib.Path(config.POSE_DATA_BASE_PATH.format(experiment_id=expermiment_id)).iterdir())
-
 # <markdowncell>
 
 # # data loading
 
 # <codecell>
 
-joint_positions = foldl(preprocessing.get_data(), 
-                        preprocessing.add_third_dimension,
-                        preprocessing.get_only_first_legs)[:, :, :config.NB_DIMS]
+#joint_positions = foldl(preprocessing.get_data(), 
+#                        preprocessing.add_third_dimension,
+#                        preprocessing.get_only_first_legs)[:, :, :config.NB_DIMS]
+#
+#NB_FRAMES = joint_positions.shape[0]
+#__N_INPUT__ = len(config.LEGS) * config.NB_TRACKED_POINTS
 
-NB_FRAMES = joint_positions.shape[0]
-__N_INPUT__ = len(config.LEGS) * config.NB_TRACKED_POINTS
+# <codecell>
+
+from som_vae.helpers.misc import foldl
+
+joint_positions = data.EXPERIMENTS\
+    .map(config.positional_data)\
+    .map(preprocessing._simple_checks_)\
+    .map(preprocessing._get_camera_of_interest_)\
+    .map(preprocessing._get_visible_legs_)\
+    .map(preprocessing.add_third_dimension)\
+    .map(preprocessing.get_only_first_legs)\
+    .to_list()
+
+joint_positions, normalisation_factors = preprocessing.normalize(np.vstack(joint_positions))
 
 # <codecell>
 
@@ -293,7 +202,7 @@ joint_positions, joint_norm_factor = preprocessing.normalize(joint_positions)
 # <codecell>
 
 plots.ploting_frames(joint_positions)
-plots.ploting_frames(joint_positions_raw)
+plots.ploting_frames(joint_positions - joint_norm_factor)
 
 # <markdowncell>
 
@@ -464,11 +373,18 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels=None, tf_sessio
     
     num_batches = len(data)//batch_size
     
+    def _concat_(xs):
+        if len(xs[0].shape) == 1:
+            return np.hstack(xs)
+        else:
+            return np.vstack(xs)
+    
     with tf.Session(config=tf_session_config) as sess:
         sess.run(tf.global_variables_initializer())
         saver.restore(sess, modelpath)
 
-        cluster_assignments, x_hat_embedding, x_hat_encoding, x_hat_latent = [np.vstack(_r) for _r in  
+        #everything = [sess.run([model.k,  model.x_hat_embedding, model.x_hat_encoding, model.z_e],  feed_dict={x: batch_data}) for batch_data in chunks(data, num_batches)]
+        cluster_assignments, x_hat_embedding, x_hat_encoding, x_hat_latent = [_concat_(_r) for _r in  
                                                                               zip(*[sess.run([model.k,  
                                                                                               model.x_hat_embedding,
                                                                                               model.x_hat_encoding,
@@ -525,7 +441,8 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
         x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
     else:
         input_length = 1
-        input_channels = __N_INPUT__ * __NB_DIMS__
+        #input_channels = __N_INPUT__ * __NB_DIMS__
+        input_channels = config['input_channels']
         x = tf.placeholder(tf.float32, shape=[None, input_channels]) 
         
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
@@ -546,7 +463,7 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
         shutil.rmtree(os.path.dirname(modelpath))
         
     print(f"got (train): {result[0]}")
-    print(f"got (val: {result[0]}")
+    print(f"got (val: {result_val[0]}")
 
     return result, model, (train_losses, test_losses, test_losses_reconstruction), result_val
 
@@ -588,8 +505,8 @@ __ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0
 
 # TODO add hash of config to modelpath
 
-config = {
-    "num_epochs": 200,
+som_vae_config = {
+    "num_epochs": 400,
     "patience": 100,
     "batch_size": 50, # len(joint_positions), # if time_series then each batch should be a time series
     "latent_dim": __latent_dim__,
@@ -599,10 +516,10 @@ config = {
     #"beta": 0.0, #0.9,
     #"gamma": 0.0, #1.8,
     #"tau": 0.0, # 1.4,
-    "alpha": 1.0,
-    "beta": 0.9,
-    "gamma": 1.8,
-    "tau": 1.4,
+    "alpha": 1.0,          # commit loss
+    "beta": 0.9,           # loss som
+    "gamma": 1.8,          # loss proba
+    "tau": 0.4,            # loss z proba
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
@@ -614,13 +531,14 @@ config = {
     "time_series": False,
     "image_like_input": False,
     "loss_weight_encoding": 1.0,
-    "loss_weight_embedding": 1.0
+    "loss_weight_embedding": 2.0,
+    "input_channels": joint_positions.shape[1] * config.NB_DIMS
 }
 
 # <codecell>
 
 # creating path to store model
-pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 # <markdowncell>
 
@@ -628,8 +546,9 @@ pathlib.Path(config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
 
 # <codecell>
 
-# reshaping the data, the selection is there to be sure
-reshaped_joint_position = joint_positions[:,:,:__NB_DIMS__].reshape(-1, __N_INPUT__ * __NB_DIMS__)
+# flatten the data
+reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1)
+
 
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction
@@ -672,13 +591,16 @@ reload(somvae_model)
 tf.reset_default_graph()
 
 _args = inspect.getfullargspec(train_and_evaluate_model).args
-res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:config[k] for k in _args if k in config}, **data, **{"config": config}})
+res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:som_vae_config[k] for k in _args if k in som_vae_config}, **data, **{"config": som_vae_config}})
+
+
+# <codecell>
 
 def _reverse_to_original_shape_(pos_data, input_shape=None):
     if input_shape is None:
-        input_shape = (__N_INPUT__, __NB_DIMS__)
+        input_shape = (-1, config.NB_DIMS)
         
-    return scaler.inverse_transform(pos_data).reshape(-1, *(input_shape))
+    return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
 reconstructed_from_embedding_train =  _reverse_to_original_shape_(res[1])
 reconstructed_from_embedding_val   =  _reverse_to_original_shape_(res_val[1])
@@ -687,26 +609,26 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(res_val[3])
 
 # <codecell>
 
-plot_losses(losses)
-plot_latent_frame_distribution(res[2], nb_bins=__latent_dim__)
-plot_cluster_assignment_over_time(res[2])
+plots.plot_losses(losses)
+plots.plot_latent_frame_distribution(res[2], nb_bins=__latent_dim__)
+plots.plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
-plot_comparing_joint_position_with_reconstructed(joint_positions, 
+plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
                                                  np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
-plot_comparing_joint_position_with_reconstructed(joint_positions, 
+plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
                                                  np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
-print(((joint_positions[:len(res[3])] - reconstructed_from_encoding_train) ** 2).mean())
-print(((joint_positions[:len(res[3])] - reconstructed_from_embedding_train) ** 2).mean())
-print(((joint_positions[len(res[3]):] - reconstructed_from_encoding_val) ** 2).mean())
-print(((joint_positions[len(res[3]):] - reconstructed_from_embedding_val) ** 2).mean())
+print(((joint_positions[:len(res[3]),:,:config.NB_DIMS] - reconstructed_from_encoding_train) ** 2).mean())
+print(((joint_positions[len(res[3]):,:,:config.NB_DIMS] - reconstructed_from_encoding_val) ** 2).mean())
+print(((joint_positions[:len(res[3]),:,:config.NB_DIMS] - reconstructed_from_embedding_train) ** 2).mean())
+print(((joint_positions[len(res[3]):,:,:config.NB_DIMS] - reconstructed_from_embedding_val) ** 2).mean())
 
 # <markdowncell>
 
@@ -714,9 +636,13 @@ print(((joint_positions[len(res[3]):] - reconstructed_from_embedding_val) ** 2).
 
 # <codecell>
 
-def reverse_pos_pipeline(x, normalisation_term=joint_norm_factor):
+def reverse_pos_pipeline(x, normalisation_term=normalisation_factors):
     """TODO This is again pretty shitty... ultra hidden global variable"""
-    return x + normalisation_term 
+    return x + normalisation_term[:x.shape[-1]]
+
+# <codecell>
+
+from som_vae.helpers.video import _float_to_int_color_
 
 # <codecell>
 
@@ -730,13 +656,105 @@ joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed
 
 # <codecell>
 
+from som_vae.settings.data import EXPERIMENTS
+
+# <codecell>
+
+EXPERIMENTS
+
+# <codecell>
+
+images_paths_for_experiments = EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+                                          .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+                                          .to_list()
+
+# <codecell>
+
+def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None):
+    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
+
+    Args:
+        xs: [<pos data>] list of pos data, of shape: [frames, limb, dimensions] (can be just one, but in an array)
+            will plot all of them, the colors get lighter
+        embeddings: [<embeddings_id>]
+            assumed to be in sequence with `get_frame_path` function.
+            length of embeddings -> number of frames
+        file_path: <str>, default: SEQUENCE_GIF_PATH
+            file path used to get
+    Returns:
+        <str>                            the file path under which the gif was saved
+    """
+    if cluster_id_to_visualize is None:
+        cluster_assignment_idx = list(range(len(cluster_assignments)))
+    else:
+        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
+    
+    
+    cluster_ids = np.unique(cluster_assignments)
+    if cluster_colors is None:
+        cluster_colors = dict(zip(cluster_ids,
+                                  video._float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+
+    n_frames = positional_data[0].shape[0]
+    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
+    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int)[cluster_assignment_idx].tolist()
+
+    _train_test_split_marker = np.int(n_train / n_frames * image_width)
+    _train_test_split_marker_colours = [(255, 0, 0), (0, 255, 0)]
+
+    _colors_for_pos_data = [video.lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
+
+    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment):
+        # kinda ugly... note that some variables are from the upper "frame"
+        f = video._add_frame_and_embedding_id_(frame, embedding_id, frame_id)
+
+        # xs are the multiple positional data to plot
+        for x_i, x in enumerate(positional_data):
+            f = video.plot_drosophila_2d(x[frame_id].astype(np.int), img=f, colors=_colors_for_pos_data[x_i])
+
+
+        # train test split marker
+        if n_train == frame_id:
+            cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
+        else:
+            cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
+
+        # train / test text
+        f = cv2.putText(img=f,
+                        text='train' if frame_id < n_train else 'test',
+                        org=(_train_test_split_marker, image_height - 40),
+                        fontFace=1,
+                        fontScale=1,
+                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1],
+                        thickness=1)
+
+        # cluster assignment bar
+        for line_idx, l in enumerate(lines_pos):
+            if line_idx == frame_nb:
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
+            else:
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
+
+        return f
+
+    frames = [pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
+              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
+                                                                  cluster_assignments[cluster_assignment_idx], 
+                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))]
+    
+    output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
+    video._save_frames_(output_path, frames, format='mp4')
+
+    return output_path
+
+# <codecell>
+
 # full video
 _p = comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
-                                         embeddings=cluster_assignments,
-                                         n_train=res[2].shape[0],
+                                         images_paths_for_experiments=images_paths_for_experiments,
+                                         cluster_assignments=cluster_assignments,
                                          cluster_colors=cluster_colors,
-                                         xs_labels=["joint_pos_orig", "joint_pos_encoding", "joint_pos_embedding"]
-                                        )
+                                         n_train=res[2].shape[0])
 
 print(_p)
 display_video(_p)
@@ -744,25 +762,33 @@ display_video(_p)
 # <codecell>
 
 # Creating videos for each cluster
+from som_vae.helpers import misc
+reload(video)
 from collections import OrderedDict
 
 __N_CLUSTER_TO_VIZ__ = 10
 
-_positional_data = [reverse_pos_pipeline(p) for p in [joint_pos_encoding, joint_pos_encoding, joint_pos_embedding]]
+_positional_data = [reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]]
 
-_t = [(flatten(sequences), cluster_id) for cluster_id, sequences in group_by_cluster(cluster_assignments).items()]
+_t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
 _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+
 cluster_vids = OrderedDict((p[1], comparision_video_of_reconstruction(_positional_data,
-                                                    embeddings=cluster_assignments,
-                                                    n_train=res[2].shape[0],
-                                                    cluster_colors=cluster_colors,
-                                                    cluster_assignment_idx=p[0]))
+                                                                      cluster_assignments=cluster_assignments,
+                                                                      images_paths_for_experiments=images_paths_for_experiments,
+                                                                      n_train=res[2].shape[0],
+                                                                      cluster_colors=cluster_colors,
+                                                                      cluster_id_to_visualize=p[1]))
                     for p in _t[:__N_CLUSTER_TO_VIZ__])
 
 # <codecell>
 
+cluster_vids.keys()
+
+# <codecell>
+
 # specific cluster id
-cluster_id_of_interest = 40
+cluster_id_of_interest = 57
 display_video(cluster_vids[cluster_id_of_interest])
 
 # <codecell>

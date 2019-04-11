@@ -1,6 +1,7 @@
 import pickle
 import pathlib
 
+from som_vae.helpers.misc import get_hostname
 from som_vae.settings import data
 
 NB_DIMS = 2
@@ -21,14 +22,14 @@ STUDY_ID = "180920_aDN_CsCh"
 EXPERIMENT_ID = "001_SG1"
 FLY_ID = "Fly2"
 
-__DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
-
-## if in lab
-# __DATA_ROOT__ = "/home/samuel/"
-# __EXPERIMENT_ROOT__ =  "/ramdya-nas/SVB/experiments"
+if get_hostname() == 'upramdyapc6':
+    __DATA_ROOT__ = "/home/samuel/"
+    __EXPERIMENT_ROOT__ =  "/ramdya-nas/SVB/experiments"
+else:
+    __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
+    __EXPERIMENT_ROOT__ = f"{__DATA_ROOT__}/experiments"
 
 __VIDEO_ROOT__ = f"{__DATA_ROOT__}/videos"
-__EXPERIMENT_ROOT__ = f"{__DATA_ROOT__}/experiments"
 
 
 # Check out the functions below, use them and not these fragments
@@ -42,7 +43,7 @@ PATH_EXPERIMENT_IMAGE = "{base_experiment_path}/behData/images/camera_{camera_id
 #POSE_FRAME_PATH = "/ramdya-nas/SVB/experiments/{fly_id}/001_coronal/behData/images_renamed/camera_{{camera_id}}_img_{{frame_id:06d}}.jpg".format(fly_id=FLY)
 
 SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id="todo_dummy_change_this")
-EXPERIMENT_VIDEO_PATH = __VIDEO_ROOT__ + "/{experiment_id}_sequence_{begin}-{end}.mp4"
+EXPERIMENT_VIDEO_PATH = __VIDEO_ROOT__ + "/{experiment_id}_sequence_{vid_id}.mp4"
 
 
 def full_experiment_id(study_id=STUDY_ID, experiment_id=EXPERIMENT_ID, fly_id=FLY_ID):

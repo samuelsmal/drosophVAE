@@ -69,7 +69,7 @@ def get_only_first_legs(joint_positions):
 def normalize(joint_positions, using_median=True, to_probability_distr=False):
     # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
     if using_median:
-        applied = np.median(joint_positions.reshape(-1, __NB_DIMS__), axis=0)
+        applied = np.median(joint_positions.reshape(-1, joint_positions.shape[-1]), axis=0)
         return joint_positions - applied, applied
     elif to_probability_distr:
         return
