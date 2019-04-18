@@ -525,8 +525,8 @@ som_vae_config = {
     #"tau": 0.0, # 1.4,
     "alpha": 0.0,          # commit loss
     "beta": 0.0,           # loss som
-    "gamma": 0.0,          # loss proba
-    "tau": 0.0,            # loss z proba
+    "gamma": 1.8,          # loss proba
+    "tau": 1.4,            # loss z proba
     "decay_factor": 0.9,
     "name": __name__,
     "ex_name": __ex_name__,
