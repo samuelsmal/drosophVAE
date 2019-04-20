@@ -24,7 +24,7 @@ def bias_variable(shape, name):
 
 def conv2d(x, shape, name, strides=[1,1,1,1]):
     """Creates a 2D convolutional layer with weight and bias variables.
-    
+
     Args:
         x (tf.Tensor): Input tensor.
         shape (list): Shape of the weight matrix.
@@ -40,7 +40,7 @@ def conv2d(x, shape, name, strides=[1,1,1,1]):
 
 def conv2d_transposed(x, shape, outshape, name, strides=[1,1,1,1]):
     """Creates a transposed convolutional layer simimar to conv2d.
-    
+
     Args:
         x (tf.Tensor): Input tensor.
         shape (list): Shape of the weight matrix.
@@ -61,7 +61,7 @@ def max_pool_2x2(x):
 
 def conv1d(x, shape, name, stride=1):
     """Creates a 1D convolutional layer with weight and bias variables.
-    
+
     Args:
         x (tf.Tensor): Input tensor.
         shape (list): Shape of the weight matrix.
@@ -82,14 +82,14 @@ def max_pool_2x1(x):
 
 def lazy_scope(function):
     """Creates a decorator for methods that makes their return values load lazily.
-    
+
     A method with this decorator will only compute the return value once when called
     for the first time. Afterwards, the value will be cached as an object attribute.
     Inspired by: https://danijar.com/structuring-your-tensorflow-models
-    
+
     Args:
         function (func): Function to be decorated.
-        
+
     Returns:
         decorator: Decorator for the function.
     """
@@ -109,9 +109,11 @@ class SOMVAE:
     """Class for the SOM-VAE model as described in https://arxiv.org/abs/1806.02199"""
 
     def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
-            input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1., mnist=True, loss_weight_embedding=1., loss_weight_encoding=1.):
+            input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1.,
+                 image_like_input=True,
+                 loss_weight_embedding=1., loss_weight_encoding=1., config=None):
         """Initialization method for the SOM-VAE model object.
-        
+
         Args:
             inputs (tf.Tensor): The input tensor for the model.
             latent_dim (int): The dimensionality of the latent embeddings (default: 64).
@@ -126,7 +128,7 @@ class SOMVAE:
             beta (float): The weight for the SOM loss (default: 1.).
             gamma (float): The weight for the transition probability loss (default: 1.).
             tau (float): The weight for the smoothness loss (default: 1.).
-            mnist (bool): Flag that tells the model if we are training in MNIST-like data (default: True).
+            image_like_input (bool): Flag that tells the model if we are training in MNIST-like data (default: True).
         """
         self.inputs = inputs
         self.latent_dim = latent_dim
@@ -140,9 +142,14 @@ class SOMVAE:
         self.beta = beta
         self.gamma = gamma
         self.tau = tau
-        self.mnist = mnist
+        self.image_like_input = image_like_input
         self.loss_weight_embedding = loss_weight_embedding
         self.loss_weight_encoding = loss_weight_encoding
+
+        self.config = config
+
+        # remember the decorator..., and thus their code will be executed -> make sure that
+        # everything is setup
         self.batch_size
         self.embeddings
         self.transition_probabilities
@@ -166,7 +173,10 @@ class SOMVAE:
 
     @lazy_scope
     def embeddings(self):
-        """Creates variable for the SOM embeddings."""
+        """Creates variable for the SOM embeddings.
+
+        For reach som_dim one embedding of dim `latent_dim`
+        """
         embeddings = tf.get_variable("embeddings", self.som_dim+[self.latent_dim],
                              initializer=tf.truncated_normal_initializer(stddev=0.05))
 
@@ -187,7 +197,7 @@ class SOMVAE:
 
     @lazy_scope
     def global_step(self):
-        """Creates global_step variable for the optimization."""
+        """Creates global_step variable for the optimization (keeping track of it)."""
         global_step = tf.Variable(0, trainable=False, name="global_step")
         return global_step
 
@@ -202,7 +212,7 @@ class SOMVAE:
     @lazy_scope
     def z_e(self):
         """Computes the latent encodings of the inputs."""
-        if self.mnist:
+        if self.image_like_input:
             with tf.variable_scope("encoder"):
                 h_conv1 = tf.nn.relu(conv2d(self.inputs, [4,4,1,256], "conv1"))
                 h_pool1 = max_pool_2x2(h_conv1)
@@ -213,9 +223,12 @@ class SOMVAE:
                 _z_e = tf.keras.layers.Dense(self.latent_dim)(h_flat)
         else:
             with tf.variable_scope("encoder"):
-                h_1 = tf.keras.layers.Dense(256, activation="relu")(self.inputs)
-                h_2 = tf.keras.layers.Dense(128, activation="relu")(h_1)
-                _z_e = tf.keras.layers.Dense(self.latent_dim, activation="relu")(h_2)
+                h_1     = tf.keras.layers.Dense(256,             activation=self.config['activation_fn'])(self.inputs)
+                h_2     = tf.keras.layers.Dense(128,             activation=self.config['activation_fn'])(h_1)
+                h_z_e_3 = tf.keras.layers.Dense(64,              activation=self.config['activation_fn'])(h_2)
+                h_z_e_4 = tf.keras.layers.Dense(32,              activation=self.config['activation_fn'])(h_z_e_3)
+                h_z_e_5 = tf.keras.layers.Dense(16,              activation=self.config['activation_fn'])(h_z_e_4)
+                _z_e    = tf.keras.layers.Dense(self.latent_dim, activation=self.config['activation_fn'])(h_z_e_5)
         return _z_e
 
 
@@ -249,13 +262,14 @@ class SOMVAE:
         k_1 = self.k // self.som_dim[1]
         k_2 = self.k % self.som_dim[1]
         k_stacked = tf.stack([k_1, k_2], axis=1)
+        # remember `gather_nd` selects the embedding
         z_q = tf.gather_nd(self.embeddings, k_stacked)
         return z_q
 
 
     @lazy_scope
     def z_q_neighbors(self):
-        """Aggregates the respective neighbors in the SOM for every embedding in z_q. 
+        """Aggregates the respective neighbors in the SOM for every embedding in z_q.
         Using a rectangular grid.
         """
         k_1 = self.k // self.som_dim[1]
@@ -288,7 +302,7 @@ class SOMVAE:
     @lazy_scope
     def x_hat_embedding(self):
         """Reconstructs the input from the embeddings."""
-        if self.mnist:
+        if self.image_like_input:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 flat_size = 7*7*256
                 h_flat_dec = tf.keras.layers.Dense(flat_size)(self.z_q)
@@ -300,16 +314,20 @@ class SOMVAE:
                 x_hat = h_deconv2
         else:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_q)
-                h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                h_x_embed_0 = tf.keras.layers.Dense(16,                  activation=self.config['activation_fn'])(self.z_q)
+                h_x_embed_1 = tf.keras.layers.Dense(32,                  activation=self.config['activation_fn'])(h_x_embed_0)
+                h_x_embed_2 = tf.keras.layers.Dense(64,                  activation=self.config['activation_fn'])(h_x_embed_1)
+                h_x_embed_3 = tf.keras.layers.Dense(128,                 activation=self.config['activation_fn'])(h_x_embed_2)
+                h_x_embed_4 = tf.keras.layers.Dense(256,                 activation=self.config['activation_fn'])(h_x_embed_3)
+                x_hat       = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_embed_4)
+
         return x_hat
 
 
     @lazy_scope
     def x_hat_encoding(self):
         """Reconstructs the input from the encodings."""
-        if self.mnist:
+        if self.image_like_input:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 flat_size = 7*7*256
                 h_flat_dec = tf.keras.layers.Dense(flat_size)(self.z_e)
@@ -321,9 +339,12 @@ class SOMVAE:
                 x_hat = h_deconv2
         else:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_3 = tf.keras.layers.Dense(128, activation="relu")(self.z_e)
-                h_4 = tf.keras.layers.Dense(256, activation="relu")(h_3)
-                x_hat = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_4)
+                h_x_encod_0 = tf.keras.layers.Dense(16,                  activation=self.config['activation_fn'])(self.z_e)
+                h_x_encod_1 = tf.keras.layers.Dense(32,                  activation=self.config['activation_fn'])(h_x_encod_0)
+                h_x_encod_2 = tf.keras.layers.Dense(64,                  activation=self.config['activation_fn'])(h_x_encod_1)
+                h_x_encod_3 = tf.keras.layers.Dense(128,                 activation=self.config['activation_fn'])(h_x_encod_2)
+                h_x_encod_4 = tf.keras.layers.Dense(256,                 activation=self.config['activation_fn'])(h_x_encod_3)
+                x_hat       = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_encod_4)
         return x_hat
 
 
@@ -364,6 +385,7 @@ class SOMVAE:
         k_stacked = tf.stack([k_1_old, k_2_old, k_1, k_2], axis=1)
         transitions_all = tf.gather_nd(self.transition_probabilities, k_stacked)
         loss_probabilities = -self.gamma * tf.reduce_mean(tf.log(transitions_all))
+        tf.summary.scalar("loss_probabilities", loss_probabilities)
         return loss_probabilities
 
 
@@ -379,6 +401,7 @@ class SOMVAE:
         out_probabilities_flat = tf.reshape(out_probabilities_old, [self.batch_size, -1])
         weighted_z_dist_prob = tf.multiply(self.z_dist_flat, out_probabilities_flat)
         loss_z_prob = tf.reduce_mean(weighted_z_dist_prob)
+        tf.summary.scalar("loss_z_prob", loss_z_prob)
         return loss_z_prob
 
 

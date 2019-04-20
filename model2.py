@@ -19,6 +19,8 @@ import datetime
 import logging
 import matplotlib.pyplot as plt
 import numpy as np
+from hashlib import sha256
+import json
 import os
 import pandas as pd
 import pathlib
@@ -58,110 +60,6 @@ enable_logging()
 
 # <markdowncell>
 
-# # playground
-
-# <codecell>
-
-def get_path_for_image(d, frame_id):
-    base = config.PATH_EXPERIMENT.format(base_path=config.__EXPERIMENT_ROOT__, 
-                                         study_id=d.study_id,
-                                         fly_id=d.fly_id,
-                                         experiment_id=d.experiment_id)
-
-    path_image = config.PATH_EXPERIMENT_IMAGE.format(base_experiment_path=base,
-                                                      camera_id=config.CAMERA_OF_INTEREST)
-    
-    return path_image.format(image_id=frame_id)
-
-# <codecell>
-
-# WIP
-# get all images for each experiment
-experiments_with_images = seq(data.EXPERIMENTS).map(lambda x: (x, [(i, cv2.imread(p)) for i, p in config.images_paths(x)])).to_list()
-
-experiments_with_images[0][1]
-
-def _n_frames_per_experiment_(labelled_data):
-    return seq(labelled_data)\
-        .flat_map(lambda x: ((data._key_(x), frame_id) for frame_id in range(*x.sequence)))\
-        .count_by_key()
-
-# <codecell>
-
-reload(config)
-reload(data)
-reload(video)
-
-# TODO adapt the file path setting
-_t = data.LABELLED_DATA[0]
-video_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=config.full_experiment_id(_t.study_id, _t.experiment_id, _t.fly_id), begin='full', end='video')
-
-params = {"fontFace": 1,
-          "fontScale": 1,
-          "color": (255, 255, 255),
-          "thickness": 1}
-
-def add_texts(x):
-    frame = cv2.putText(x[1], 
-                        text=f"frame: {x[0]:0>4}: label: {x[2].name}",
-                        org=(0, 12), 
-                        **{**params, 'color': video._BEHAVIOR_COLORS_[x[2]]})
-    # 
-    frame = cv2.putText(frame, 
-                        text=f"{x[3]}",
-                        org=(x[1].shape[1] // 2, 12), 
-                        **params)
-    
-    return frame
-
-frames = seq(data.LABELLED_DATA)\
-  .sorted(key=lambda x: (x.label.value, config.full_experiment_id(study_id=x.study_id, experiment_id=x.experiment_id, fly_id=x.fly_id)))\
-  .flat_map(lambda x: [(frame_id , 
-                        cv2.imread(config.get_path_for_image(x, frame_id)),
-                        x.label,
-                        config.full_experiment_id(study_id=x.study_id, experiment_id=x.experiment_id, fly_id=x.fly_id)) 
-                       for frame_id in range(*x.sequence)])\
-  .map(add_texts)
-
-video._save_frames_(video_path, frames, format='mp4')
-
-
-display_video(video_path)
-
-# <codecell>
-
-path_experiment = config.PATH_EXPERIMENT.format(base_path=config.__PATH_TO_DATA__,
-                                                study_id=config.STUDY_ID,
-                                                fly_id=config.FLY_ID,
-                                                experiment_id=config.EXPERIMENT_ID)
-
-path_experiment_images = pathlib.Path(config.PATH_EXPERIMENT_IMAGE.format(base_experiment_path=path_experiment,
-                                                             camera_id=config.CAMERA_OF_INTEREST,
-                                                             image_id=0)).parent
-
-# <codecell>
-
-Frame = namedtuple('Frame', 'frame_id, path, camera_id, frame')
-
-def _to_frame_(path, camera_id=config.CAMERA_OF_INTEREST):
-    m = re.match('camera_' + str(camera_id) + '_img_(\d{6})\.jpg', path.name)
-    
-    if m is not None:
-        return int(m[1]), path, camera_id, cv2.imread(str(path))
-    else:
-        return None
-    
-def get_frames(path, camera_id=config.CAMERA_OF_INTEREST):
-    # parent is important here
-    _t = seq(pathlib.Path(path).iterdir())\
-        .map(partial(_to_frame_, camera_id=camera_id))\
-        .filter(lambda x: x is not None)\
-        .map(Frame._make)
-    
-    return _t
-
-# <markdowncell>
-
 # # data loading
 
 # <codecell>
@@ -191,10 +89,6 @@ joint_positions, normalisation_factors = preprocessing.normalize(np.vstack(joint
 
 # <codecell>
 
-joint_positions.shape
-
-# <codecell>
-
 # TODO for some reason some positions are missing
 frames_idx_with_labels = seq(settings.data.LABELLED_DATA).flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()[:len(joint_positions)]
 frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
@@ -209,11 +103,15 @@ joint_positions = joint_positions[frames_of_interest]
 # <codecell>
 
 plots.ploting_frames(joint_positions)
-plots.ploting_frames(joint_positions - joint_norm_factor)
+plots.ploting_frames(joint_positions - normalisation_factors)
 
 # <markdowncell>
 
 # # SOM-VAE model
+
+# <codecell>
+
+reload(somvae_model)
 
 # <markdowncell>
 
@@ -456,14 +354,15 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 
     lr_val = tf.placeholder_with_default(learning_rate, [])
 
+    # TODO pack all these variables in a config, at the end of the project extract them again
     model = somvae_model.SOMVAE(inputs=x, latent_dim=latent_dim, som_dim=som_dim, learning_rate=lr_val, decay_factor=decay_factor,
             input_length=input_length, input_channels=input_channels, alpha=alpha, beta=beta, gamma=gamma,
-            tau=tau, mnist=image_like_input)
+            tau=tau, image_like_input=image_like_input, config=config)
 
     test_losses, train_losses, test_losses_reconstruction = train_model(model, x, lr_val, generator=data_generator, **extract_args(config, train_model))
 
-    result = evaluate_model(model, x, data=X_train, labels=y_train, **extract_args(config, evaluate_model))
-    result_val = evaluate_model(model, x, data=X_val, labels=y_val, **extract_args(config, evaluate_model))
+    result =     evaluate_model(model, x, data=X_train, labels=y_train, **extract_args(config, evaluate_model))
+    result_val = evaluate_model(model, x, data=X_val,   labels=y_val,   **extract_args(config, evaluate_model))
     
 
     if not save_model:
@@ -481,34 +380,10 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 # <codecell>
 
 ## config
-"""
-Params:
-    num_epochs (int): Number of training epochs.
-    patience (int): Patience for the early stopping.
-    batch_size (int): Batch size for the training.
-    latent_dim (int): Dimensionality of the SOM-VAE's latent space.
-    som_dim (list): Dimensionality of the self-organizing map.
-    learning_rate (float): Learning rate for the optimization.
-    alpha (float): Weight for the commitment loss.
-    beta (float): Weight for the SOM loss.
-    gamma (float): Weight for the transition probability loss.
-    tau (float): Weight for the smoothness loss.
-    decay_factor (float): Factor for the learning rate decay.
-    name (string): Name of the experiment.
-    ex_name (string): Unique name of this particular run.
-    logdir (path): Directory for the experiment logs.
-    modelpath (path): Path for the model checkpoints.
-    interactive (bool): Indicator if there should be an interactive progress bar for the training.
-    data_set (string): Data set for the training.
-    save_model (bool): Indicator if the model checkpoints should be kept after training and evaluation.
-    time_series (bool): Indicator if the model should be trained on linearly interpolated
-        MNIST time series.
-    mnist (bool): Indicator if the model is trained on MNIST-like data.
-"""
-__name__ = "tryouts"
-__latent_dim__ = 64
-__som_dim__ = [8,8]
-__ex_name__ = "{}_{}_{}-{}_{}_{}".format(__name__, __latent_dim__, __som_dim__[0], __som_dim__[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), uuid.uuid4().hex[:5])
+
+_name_ = "adapting_latent_and_act_fn_selu"
+_latent_dim_ = 10 
+_som_dim = [8,8]
 
 # TODO add hash of config to modelpath
 
@@ -516,8 +391,8 @@ som_vae_config = {
     "num_epochs": 400,
     "patience": 100,
     "batch_size": 50, # len(joint_positions), # if time_series then each batch should be a time series
-    "latent_dim": __latent_dim__,
-    "som_dim": __som_dim__,
+    "latent_dim": _latent_dim_,
+    "som_dim": _som_dim,
     "learning_rate": 0.0005,
     #"alpha": 0.0, #1.0,
     #"beta": 0.0, #0.9,
@@ -528,10 +403,7 @@ som_vae_config = {
     "gamma": 1.8,          # loss proba
     "tau": 1.4,            # loss z proba
     "decay_factor": 0.9,
-    "name": __name__,
-    "ex_name": __ex_name__,
-    "logdir": "../logs/{}".format(__ex_name__),
-    "modelpath": "../models/{0}/{0}.ckpt".format(__ex_name__),
+    "name": _name_,
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
@@ -539,13 +411,32 @@ som_vae_config = {
     "image_like_input": False,
     "loss_weight_encoding": 1.0,
     "loss_weight_embedding": 0.0,
+    "activation_fn": "selu", # or relu -> with normalisation layer?
     "input_channels": joint_positions.shape[1] * config.NB_DIMS
 }
+
+# todo add git commit hash to config name
+# todo change _name_ to something meaningful
+
+_ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(som_vae_config, sort_keys=True).encode()).hexdigest()[:5])
+som_vae_config['ex_name'] = _ex_name_
+
+ 
+som_vae_config["logdir"] = "../logs/{}".format(_ex_name_)
+som_vae_config["modelpath"] = "../models/{0}/{0}.ckpt".format(_ex_name_)
 
 # <codecell>
 
 # creating path to store model
 pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
+
+# <codecell>
+
+som_vae_config['modelpath']
+
+# <codecell>
+
+ls ../models/
 
 # <markdowncell>
 
@@ -561,6 +452,15 @@ reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_po
 # this is due to the sigmoid activation function in the reconstruction
 scaler = MinMaxScaler()
 #resh = scaler.fit_transform(resh)
+
+# <codecell>
+
+reshaped_joint_position.shape
+
+# <codecell>
+
+assert np.product(reshaped_joint_position.shape[1:]) > som_vae_config['latent_dim'],\
+       'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
 
 # <codecell>
 
@@ -632,10 +532,20 @@ plots.plot_comparing_joint_position_with_reconstructed(joint_positions,
 
 # <codecell>
 
-print(((joint_positions[:len(res[3]),:,:config.NB_DIMS] - reconstructed_from_encoding_train) ** 2).mean())
-print(((joint_positions[len(res[3]):,:,:config.NB_DIMS] - reconstructed_from_encoding_val) ** 2).mean())
-print(((joint_positions[:len(res[3]),:,:config.NB_DIMS] - reconstructed_from_embedding_train) ** 2).mean())
-print(((joint_positions[len(res[3]):,:,:config.NB_DIMS] - reconstructed_from_embedding_val) ** 2).mean())
+from numpy.lib.index_tricks import s_
+
+def mean_squared_difference(a, b):
+    return ((a - b) ** 2).mean()
+
+
+_n_train_ = len(res[3])
+_idx_ = (s_[:_n_train_,:,:config.NB_DIMS], s_[_n_train_:,:,:config.NB_DIMS]) * 2
+_order_split_ = ['train', 'test'] * 2
+_order_ = ['encoding'] * 2 + ['embedding'] * 2
+_loop_data_ = (reconstructed_from_encoding_train, reconstructed_from_encoding_val, reconstructed_from_embedding_train, reconstructed_from_embedding_val)
+
+for i, o, order_split, d in zip(_idx_, _order_, _order_split_, _loop_data_):
+    print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(joint_positions[i], d)}")
 
 # <markdowncell>
 
@@ -951,7 +861,3 @@ plot_confusion_matrix(y_test, y_pred_test, classes=np.array([l.name for l in see
 
 plot_confusion_matrix(y_test, y_pred_test, classes=np.array([l.name for l in seen_labels]),  normalize=True,
                       title='test Confusion matrix, without normalization')
-
-# <codecell>
-
-
