@@ -79,13 +79,23 @@ def plot_losses(losses, legend=None):
     plt.figure(figsize=(15, 8))
     if legend is None:
         legend = ['train', 'test', 'test_recon']
-    plt.figure()
-    for l in losses:
-        plt.plot(l)
+    fig, ax1 = plt.subplots()
 
-    plt.legend(legend)
-    plt.xlabel('epoch')
-    plt.title('loss')
+    for i, l in enumerate(losses[:-1]):
+        ax1.plot(l, label=legend[i])
+        ax1.tick_params(axis='y')
+
+    ax2 = ax1.twinx()
+    ax2.plot(losses[-1], label=legend[-1], color='green')
+    ax2.tick_params(axis='y', labelcolor='green')
+
+    ax2.set_xlabel('epoch')
+
+    fig.legend()
+    fig.tight_layout()
+    #fig.title('loss')
+
+    return fig
 
 
 def plot_latent_frame_distribution(latent_assignments, nb_bins):
