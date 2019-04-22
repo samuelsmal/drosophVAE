@@ -99,6 +99,7 @@ frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
 frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
 
 joint_positions = joint_positions[frames_of_interest]
+frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
 
 # <codecell>
 
@@ -381,7 +382,7 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 
 ## config
 
-_name_ = "adapting_latent_and_act_fn_selu"
+_name_ = "adapting_latent_and_act_fn_relu"
 _latent_dim_ = 10 
 _som_dim = [8,8]
 
@@ -411,7 +412,7 @@ som_vae_config = {
     "image_like_input": False,
     "loss_weight_encoding": 1.0,
     "loss_weight_embedding": 0.0,
-    "activation_fn": "selu", # or relu -> with normalisation layer?
+    "activation_fn": "relu", # or relu -> with normalisation layer?
     "input_channels": joint_positions.shape[1] * config.NB_DIMS
 }
 
@@ -429,14 +430,6 @@ som_vae_config["modelpath"] = "../models/{0}/{0}.ckpt".format(_ex_name_)
 
 # creating path to store model
 pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
-
-# <codecell>
-
-som_vae_config['modelpath']
-
-# <codecell>
-
-ls ../models/
 
 # <markdowncell>
 
@@ -500,7 +493,6 @@ tf.reset_default_graph()
 _args = inspect.getfullargspec(train_and_evaluate_model).args
 res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:som_vae_config[k] for k in _args if k in som_vae_config}, **data, **{"config": som_vae_config}})
 
-
 # <codecell>
 
 def _reverse_to_original_shape_(pos_data, input_shape=None):
@@ -516,9 +508,14 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(res_val[3])
 
 # <codecell>
 
-plots.plot_losses(losses)
-plots.plot_latent_frame_distribution(res[2], nb_bins=__latent_dim__)
+reload(plots)
+f =plots.plot_losses(losses)
+plots.plot_latent_frame_distribution(res[2], nb_bins=_latent_dim_)
 plots.plot_cluster_assignment_over_time(res[2])
+
+# <codecell>
+
+reload(plots)
 
 # <codecell>
 
@@ -591,95 +588,12 @@ images_paths_for_experiments = np.array(images_paths_for_experiments)[frames_of_
 
 # <codecell>
 
-def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None):
-    """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
-
-    Args:
-        xs: [<pos data>] list of pos data, of shape: [frames, limb, dimensions] (can be just one, but in an array)
-            will plot all of them, the colors get lighter
-        embeddings: [<embeddings_id>]
-            assumed to be in sequence with `get_frame_path` function.
-            length of embeddings -> number of frames
-        file_path: <str>, default: SEQUENCE_GIF_PATH
-            file path used to get
-    Returns:
-        <str>                            the file path under which the gif was saved
-    """
-    if cluster_id_to_visualize is None:
-        cluster_assignment_idx = list(range(len(cluster_assignments)))
-    else:
-        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
-    
-    
-    cluster_ids = np.unique(cluster_assignments)
-    if cluster_colors is None:
-        cluster_colors = dict(zip(cluster_ids,
-                                  video._float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
-
-    n_frames = positional_data[0].shape[0]
-    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
-    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int)[cluster_assignment_idx].tolist()
-
-    _train_test_split_marker = np.int(n_train / n_frames * image_width)
-    _train_test_split_marker_colours = [(255, 0, 0), (0, 255, 0)]
-
-    _colors_for_pos_data = [video.lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
-
-    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment):
-        # kinda ugly... note that some variables are from the upper "frame"
-        f = video._add_frame_and_embedding_id_(frame, embedding_id, frame_id)
-
-        # xs are the multiple positional data to plot
-        for x_i, x in enumerate(positional_data):
-            f = video.plot_drosophila_2d(x[frame_id].astype(np.int), img=f, colors=_colors_for_pos_data[x_i])
-
-
-        # train test split marker
-        if n_train == frame_id:
-            cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
-        else:
-            cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
-
-        # train / test text
-        f = cv2.putText(img=f,
-                        text='train' if frame_id < n_train else 'test',
-                        org=(_train_test_split_marker, image_height - 40),
-                        fontFace=1,
-                        fontScale=1,
-                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1],
-                        thickness=1)
-
-        f = cv2.putText(img=f,
-                        text=settings.data._key_(experiment),
-                        org=(0, 20),
-                        fontFace=1,
-                        fontScale=1,
-                        color=(255, 255, 255),
-                        thickness=1)
-        
-        # cluster assignment bar
-        for line_idx, l in enumerate(lines_pos):
-            if line_idx == frame_nb:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
-            else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
-
-        return f
-
-    frames = [pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
-              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
-                                                                  cluster_assignments[cluster_assignment_idx], 
-                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))]
-    
-    output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
-    video._save_frames_(output_path, frames, format='mp4')
-
-    return output_path
+reload(video)
 
 # <codecell>
 
 # full video
-_p = comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
+_p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
                                          images_paths_for_experiments=images_paths_for_experiments,
                                          cluster_assignments=cluster_assignments,
                                          cluster_colors=cluster_colors,
@@ -702,7 +616,7 @@ _positional_data = [reverse_pos_pipeline(p) for p in [joint_positions, joint_pos
 _t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
 _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
 
-cluster_vids = OrderedDict((p[1], comparision_video_of_reconstruction(_positional_data,
+cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data,
                                                                       cluster_assignments=cluster_assignments,
                                                                       images_paths_for_experiments=images_paths_for_experiments,
                                                                       n_train=res[2].shape[0],
@@ -746,9 +660,108 @@ x_hat_latent_test  = res_val[4]
 
 # <codecell>
 
+np.concatenate((x_hat_latent_train, x_hat_latent_test)).shape
+
+# <codecell>
+
 from sklearn.manifold import TSNE
 
-X_embedded = TSNE(n_components=2).fit_transform(x_hat_latent_train)
+X_embedded = TSNE(n_components=2, random_state=42).fit_transform(np.concatenate((x_hat_latent_train, x_hat_latent_test)))
+
+# <codecell>
+
+def plot_embedding_assignment(X_embedded, x_id_of_interest, label_assignments):
+    seen_labels = label_assignments['label'].unique()
+    _cs = sns.color_palette(n_colors=len(seen_labels))
+
+    fig = plt.figure(figsize=(10, 10))
+    behaviour_colours = dict(zip(seen_labels, _cs))
+
+    for l, c in behaviour_colours.items():
+        _d = X_embedded[label_assignments['label'] == l]
+        # c=[c] since matplotlib asks for it
+        plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
+
+    cur_color = behaviour_colours[label_assignments.loc[x_id_of_interest, 'label']]
+    plt.scatter(X_embedded[x_id_of_interest, 0], X_embedded[x_id_of_interest, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
+    plt.legend()
+    plt.title('simple t-SNE on latent space')
+    
+    # If we haven't already shown or saved the plot, then we need to
+    # draw the figure first...
+    fig.canvas.draw()
+    #fig.canvas.draw_idle()
+#
+    ## Now we can save it to a numpy array.
+    #plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
+    #              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    #
+    #return plot_data
+    
+    fig_val = np.array(fig.canvas.renderer._renderer)[:, :, :3]
+    plt.close()
+    return fig_val
+
+# <codecell>
+
+def fig_to_value_array(fig):
+    # If we haven't already shown or saved the plot, then we need to
+    # draw the figure first...
+    fig.canvas.draw()
+    fig.canvas.draw_idle()
+
+    # Now we can save it to a numpy array.
+    plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
+                  .reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    
+    return plot_data
+
+# <codecell>
+
+def combine_images_h(img1, img2):
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+    vis = np.zeros((max(h1, h2), w1+w2, img1.shape[2]), np.uint8)
+    vis[:h1, :w1, :] = img1 
+    vis[:h2, w1:w1+w2, :] = img2 
+    #vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+    return vis
+    #cv2.imshow("test", vis)
+
+# <codecell>
+
+_img_movement_ = cv2.imread(images_paths_for_experiments[0][1])
+
+# <codecell>
+
+X_embedded.shape
+
+# <codecell>
+
+len(images_paths_for_experiments)
+
+# <codecell>
+
+frames_idx_with_labels.shape
+
+# <codecell>
+
+frames = [combine_images_h(cv2.imread(images_paths_for_experiments[i][1]),  
+                           plot_embedding_assignment(X_embedded, i, frames_idx_with_labels)) for i in range(len(images_paths_for_experiments))]
+
+# <codecell>
+
+
+
+# <codecell>
+
+frames_idx_with_labels.shape
+
+# <codecell>
+
+video._save_frames_('./tryout.mp4', frames)
+display_video('./tryout.mp4')
 
 # <codecell>
 
@@ -758,15 +771,70 @@ seen_labels = training_frames.label.unique()
 
 # <codecell>
 
+cur_frame_id = 10
 _cs = sns.color_palette(n_colors=len(seen_labels))
 
-plt.figure(figsize=(10, 10))
-for idx, l in enumerate(seen_labels):
-    _d = X_embedded[training_frames['label'] == l]
-    plt.scatter(_d[:, 0], _d[:,1], c=_cs[idx], label=l.name, )
+fig = plt.figure(figsize=(10, 10))
+_all_frames_ = pd.concat((training_frames, testing_frames))
+
+behaviour_colours = dict(zip(seen_labels, _cs))
+
+for l, c in behaviour_colours.items():
+    _d = X_embedded[_all_frames_['label'] == l]
+    # c=[c] since matplotlib asks for it
+    plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
     
+cur_color = behaviour_colours[_all_frames_.loc[cur_frame_id, 'label']]
+plt.scatter(X_embedded[cur_frame_id, 0], X_embedded[cur_frame_id, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
 plt.legend()
-plt.title('simple t-SNE on train latent space')
+plt.title('simple t-SNE on latent space');
+
+
+
+# <codecell>
+
+np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='').reshape((-))
+
+# <codecell>
+
+fig.canvas.get_width_height()[::-1]
+
+# <codecell>
+
+720 * 720 * 3
+
+# <codecell>
+
+# If we haven't already shown or saved the plot, then we need to
+# draw the figure first...
+fig.canvas.draw()
+
+# Now we can save it to a numpy array.
+plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
+              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+# <codecell>
+
+plot_data.shape
+
+# <codecell>
+
+
+
+# <codecell>
+
+h1, w1 = _img_movement_.shape[:2]
+h2, w2 = plot_data.shape[:2]
+vis = np.zeros((max(h1, h2), w1+w2, 3), np.uint8)
+vis[:h1, :w1, :] = _img_movement_ 
+vis[:h2, w1:w1+w2, :] = plot_data 
+#vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+#cv2.imshow("test", vis)
+
+# <codecell>
+
+plt.imshow(vis)
 
 # <markdowncell>
 
@@ -791,10 +859,6 @@ mdl.fit(x_hat_latent_train, y_train)
 
 y_pred_train = mdl.predict(x_hat_latent_train)
 y_pred_test = mdl.predict(x_hat_latent_test)
-
-# <codecell>
-
-confusion_matrix(y_train, y_pred_train)
 
 # <codecell>
 
