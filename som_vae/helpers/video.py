@@ -145,7 +145,7 @@ def _float_to_int_color_(colors):
     return (np.array(colors) * 255).astype(np.int).tolist()
 
 
-def comparision_video_of_reconstruction(xs, embeddings, n_train, experiments, file_path=None, cluster_colors=None, cluster_assignment_idx=None, xs_labels=None, n_frames=1000):
+def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:
@@ -159,33 +159,39 @@ def comparision_video_of_reconstruction(xs, embeddings, n_train, experiments, fi
     Returns:
         <str>                            the file path under which the gif was saved
     """
-    gif_file_path = _get_and_check_file_path_(('video-x_x-hat', 'with-embeddings_cluster_' + str(embeddings[cluster_assignment_idx][0])))
+    if cluster_id_to_visualize is None:
+        cluster_assignment_idx = list(range(len(cluster_assignments)))
+    else:
+        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
 
+    text_default_args = {
+        "fontFace": 1,
+        "fontScale": 1,
+        "thickness": 1,
+    }
+
+    cluster_ids = np.unique(cluster_assignments)
     if cluster_colors is None:
-        cluster_ids = np.unique(embeddings)
-        cluster_colors = dict(zip(cluster_ids,
-                                  _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+        cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
 
-    if cluster_assignment_idx is None:
-        cluster_assignment_idx = list(range(embeddings.shape[0]))
-        gif_file_path = _get_and_check_file_path_(('full-video-x_x-hat', 'with-embeddings_cluster_all'))
-
-    image_height, image_width, _ = cv2.imread(get_frame_path(0)).shape
-    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width)\
-                    .astype(np.int)[cluster_assignment_idx].tolist()
-
+    n_frames = positional_data[0].shape[0]
+    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
+    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int)[cluster_assignment_idx].tolist()
 
     _train_test_split_marker = np.int(n_train / n_frames * image_width)
     _train_test_split_marker_colours = [(255, 0, 0), (0, 255, 0)]
 
-    _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(xs))]
+    _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
 
-    def pipeline(frame, frame_id, embedding_id):
+    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment):
+        # frame_nb is the number of the frame shown, continuous
+        # frame_id is the id of the order of the frame,
+        # e.g. frame_nb: [0, 1, 2, 3], frame_id: [123, 222, 333, 401]
         # kinda ugly... note that some variables are from the upper "frame"
         f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
 
         # xs are the multiple positional data to plot
-        for x_i, x in enumerate(xs):
+        for x_i, x in enumerate(positional_data):
             f = plot_drosophila_2d(x[frame_id].astype(np.int), img=f, colors=_colors_for_pos_data[x_i])
 
 
@@ -196,29 +202,40 @@ def comparision_video_of_reconstruction(xs, embeddings, n_train, experiments, fi
             cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
 
         # train / test text
-        f = cv2.putText(img=np.copy(f),
+        f = cv2.putText(**text_default_args
+                        img=f,
                         text='train' if frame_id < n_train else 'test',
                         org=(_train_test_split_marker, image_height - 40),
-                        fontFace=1,
-                        fontScale=1,
-                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1],
-                        thickness=1)
+                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1])
 
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=data._key_(experiment),
+                        org=(0, 20),
+                        color=(255, 255, 255))
 
         # cluster assignment bar
         for line_idx, l in enumerate(lines_pos):
-            if line_idx == frame_id:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 2)
+            if line_idx == frame_nb:
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
             else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[embeddings[cluster_assignment_idx[line_idx]]], 1)
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
+
 
         return f
 
-    frames = [pipeline(cv2.imread(get_frame_path(i)), i, emb_id)
-              for i, emb_id in enumerate(embeddings[cluster_assignment_idx])]
-    _save_frames_(gif_file_path, frames, format='mp4')
+    frames = [pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
+              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
+                                                                  cluster_assignments[cluster_assignment_idx],
+                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))]
 
-    return gif_file_path
+    output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
+    _save_frames_(output_path, frames, format='mp4')
+
+    return output_path
+
+
+
 
 
 _BEHAVIOR_COLORS_ = dict(zip(list(data._BehaviorLabel_),
