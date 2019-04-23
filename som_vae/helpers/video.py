@@ -202,7 +202,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
             cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
 
         # train / test text
-        f = cv2.putText(**text_default_args
+        f = cv2.putText(**text_default_args,
                         img=f,
                         text='train' if frame_id < n_train else 'test',
                         org=(_train_test_split_marker, image_height - 40),
