@@ -383,7 +383,7 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 ## config
 
 _name_ = "adapting_latent_and_act_fn_relu"
-_latent_dim_ = 10 
+_latent_dim_ = 8
 _som_dim = [8,8]
 
 # TODO add hash of config to modelpath
@@ -401,8 +401,10 @@ som_vae_config = {
     #"tau": 0.0, # 1.4,
     "alpha": 0.0,          # commit loss
     "beta": 0.0,           # loss som
-    "gamma": 1.8,          # loss proba
-    "tau": 1.4,            # loss z proba
+    "gamma": 0.0,          # loss proba
+    "tau": 0.0,            # loss z proba
+    "loss_weight_encoding": 1.0,
+    "loss_weight_embedding": 0.0,
     "decay_factor": 0.9,
     "name": _name_,
     "interactive": True, # this is just for the progress bar
@@ -410,8 +412,6 @@ som_vae_config = {
     "save_model": False,
     "time_series": False,
     "image_like_input": False,
-    "loss_weight_encoding": 1.0,
-    "loss_weight_embedding": 0.0,
     "activation_fn": "relu", # or relu -> with normalisation layer?
     "input_channels": joint_positions.shape[1] * config.NB_DIMS
 }
@@ -423,13 +423,19 @@ _ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_d
 som_vae_config['ex_name'] = _ex_name_
 
  
-som_vae_config["logdir"] = "../logs/{}".format(_ex_name_)
-som_vae_config["modelpath"] = "../models/{0}/{0}.ckpt".format(_ex_name_)
+som_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
+som_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
 
 # <codecell>
 
 # creating path to store model
 pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(som_vae_config['logdir']).parent.mkdir(parents=True, exist_ok=True)
+
+_MODEL_CONFIG_PATH_ = pathlib.Path(som_vae_config['logdir']).parent.parent / 'model_configs'
+_MODEL_CONFIG_PATH_.mkdir(exist_ok=True)
+with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
+    json.dump(som_vae_config, f)
 
 # <markdowncell>
 
@@ -631,8 +637,8 @@ cluster_vids.keys()
 # <codecell>
 
 # specific cluster id
-cluster_id_of_interest = 57
-display_video(cluster_vids[cluster_id_of_interest])
+#cluster_id_of_interest = 57
+#display_video(cluster_vids[cluster_id_of_interest])
 
 # <codecell>
 
@@ -660,108 +666,9 @@ x_hat_latent_test  = res_val[4]
 
 # <codecell>
 
-np.concatenate((x_hat_latent_train, x_hat_latent_test)).shape
-
-# <codecell>
-
 from sklearn.manifold import TSNE
 
 X_embedded = TSNE(n_components=2, random_state=42).fit_transform(np.concatenate((x_hat_latent_train, x_hat_latent_test)))
-
-# <codecell>
-
-def plot_embedding_assignment(X_embedded, x_id_of_interest, label_assignments):
-    seen_labels = label_assignments['label'].unique()
-    _cs = sns.color_palette(n_colors=len(seen_labels))
-
-    fig = plt.figure(figsize=(10, 10))
-    behaviour_colours = dict(zip(seen_labels, _cs))
-
-    for l, c in behaviour_colours.items():
-        _d = X_embedded[label_assignments['label'] == l]
-        # c=[c] since matplotlib asks for it
-        plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
-
-    cur_color = behaviour_colours[label_assignments.loc[x_id_of_interest, 'label']]
-    plt.scatter(X_embedded[x_id_of_interest, 0], X_embedded[x_id_of_interest, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
-    plt.legend()
-    plt.title('simple t-SNE on latent space')
-    
-    # If we haven't already shown or saved the plot, then we need to
-    # draw the figure first...
-    fig.canvas.draw()
-    #fig.canvas.draw_idle()
-#
-    ## Now we can save it to a numpy array.
-    #plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
-    #              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    #
-    #return plot_data
-    
-    fig_val = np.array(fig.canvas.renderer._renderer)[:, :, :3]
-    plt.close()
-    return fig_val
-
-# <codecell>
-
-def fig_to_value_array(fig):
-    # If we haven't already shown or saved the plot, then we need to
-    # draw the figure first...
-    fig.canvas.draw()
-    fig.canvas.draw_idle()
-
-    # Now we can save it to a numpy array.
-    plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
-                  .reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    
-    return plot_data
-
-# <codecell>
-
-def combine_images_h(img1, img2):
-    h1, w1 = img1.shape[:2]
-    h2, w2 = img2.shape[:2]
-    vis = np.zeros((max(h1, h2), w1+w2, img1.shape[2]), np.uint8)
-    vis[:h1, :w1, :] = img1 
-    vis[:h2, w1:w1+w2, :] = img2 
-    #vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
-
-    return vis
-    #cv2.imshow("test", vis)
-
-# <codecell>
-
-_img_movement_ = cv2.imread(images_paths_for_experiments[0][1])
-
-# <codecell>
-
-X_embedded.shape
-
-# <codecell>
-
-len(images_paths_for_experiments)
-
-# <codecell>
-
-frames_idx_with_labels.shape
-
-# <codecell>
-
-frames = [combine_images_h(cv2.imread(images_paths_for_experiments[i][1]),  
-                           plot_embedding_assignment(X_embedded, i, frames_idx_with_labels)) for i in range(len(images_paths_for_experiments))]
-
-# <codecell>
-
-
-
-# <codecell>
-
-frames_idx_with_labels.shape
-
-# <codecell>
-
-video._save_frames_('./tryout.mp4', frames)
-display_video('./tryout.mp4')
 
 # <codecell>
 
@@ -789,52 +696,22 @@ plt.scatter(X_embedded[cur_frame_id, 0], X_embedded[cur_frame_id, 1], c=[cur_col
 plt.legend()
 plt.title('simple t-SNE on latent space');
 
-
-
 # <codecell>
 
-np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='').reshape((-))
-
-# <codecell>
-
-fig.canvas.get_width_height()[::-1]
-
-# <codecell>
-
-720 * 720 * 3
-
-# <codecell>
-
-# If we haven't already shown or saved the plot, then we need to
-# draw the figure first...
-fig.canvas.draw()
-
-# Now we can save it to a numpy array.
-plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
-              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
-
-# <codecell>
-
-plot_data.shape
-
-# <codecell>
+reload(video)
+_p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
+                                               images_paths_for_experiments=images_paths_for_experiments,
+                                               cluster_assignments=cluster_assignments,
+                                               cluster_colors=cluster_colors,
+                                               n_train=res[2].shape[0],
+                                               as_frames=True)
 
 
+_embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels) for i in range(len(X_embedded)))
+frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_img in zip(_p, _embedding_imgs))
 
-# <codecell>
-
-h1, w1 = _img_movement_.shape[:2]
-h2, w2 = plot_data.shape[:2]
-vis = np.zeros((max(h1, h2), w1+w2, 3), np.uint8)
-vis[:h1, :w1, :] = _img_movement_ 
-vis[:h2, w1:w1+w2, :] = plot_data 
-#vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
-
-#cv2.imshow("test", vis)
-
-# <codecell>
-
-plt.imshow(vis)
+video._save_frames_('./tryout.mp4', frames)
+display_video('./tryout.mp4')
 
 # <markdowncell>
 

@@ -3,6 +3,7 @@ import pathlib
 import logging
 import numpy as np
 import cv2
+import matplotlib.pyplot as plt
 import matplotlib.colors as mc
 import imageio
 import colorsys
@@ -111,14 +112,14 @@ def _get_and_check_file_path_(args, template=config.EXPERIMENT_VIDEO_PATH):
     return gif_file_path
 
 
-def _save_frames_(file_path, frames, format='GIF', **kwargs):
+def _save_frames_(file_path, frames, format='mp4', **kwargs):
     """
     If format==GIF then fps has to be None, duration should be ~10/60
     If format==mp4 then duration has to be None, fps should be TODO
     """
-    if format == 'GIF':
+    if format.lower() == 'gif':
         _kwargs = {'duration': 10/60}
-    elif format == 'mp4':
+    elif format.lower() == 'mp4':
         _kwargs = {'fps': 24}
 
     pathlib.Path(file_path).parent.mkdir(parents=True, exist_ok=True)
@@ -145,7 +146,9 @@ def _float_to_int_color_(colors):
     return (np.array(colors) * 255).astype(np.int).tolist()
 
 
-def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None):
+def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train,
+                                        images_paths_for_experiments, cluster_id_to_visualize=None,
+                                        cluster_colors=None, as_frames=False):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:
@@ -224,18 +227,67 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
 
         return f
 
-    frames = [pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
+    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
               for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
                                                                   cluster_assignments[cluster_assignment_idx],
-                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))]
+                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx])))
 
-    output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
-    _save_frames_(output_path, frames, format='mp4')
+    if as_frames:
+        return frames
+    else:
+        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
+        _save_frames_(output_path, frames, format='mp4')
 
-    return output_path
+        return output_path
 
 
+def plot_embedding_assignment(x_id_of_interest, X_embedded, label_assignments):
+    seen_labels = label_assignments['label'].unique()
+    _cs = sns.color_palette(n_colors=len(seen_labels))
 
+    fig = plt.figure(figsize=(10, 10))
+    behaviour_colours = dict(zip(seen_labels, _cs))
+
+    for l, c in behaviour_colours.items():
+        _d = X_embedded[label_assignments['label'] == l]
+        # c=[c] since matplotlib asks for it
+        plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
+
+    #print(x_id_of_interest)
+    _t = label_assignments.iloc[x_id_of_interest]['label']
+    #print(_t)
+    cur_color = behaviour_colours[_t]
+    plt.scatter(X_embedded[x_id_of_interest, 0], X_embedded[x_id_of_interest, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
+    plt.legend()
+    plt.title('simple t-SNE on latent space')
+
+    # TODO I would like to move the lower part to a different function, not tested if that works
+    # though
+    # If we haven't already shown or saved the plot, then we need to
+    # draw the figure first...
+    fig.canvas.draw()
+    #fig.canvas.draw_idle()
+#
+    ## Now we can save it to a numpy array.
+    #plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
+    #              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    #
+    #return plot_data
+
+    fig_val = np.array(fig.canvas.renderer._renderer)[:, :, :3]
+    plt.close()
+    return fig_val
+
+def combine_images_h(img1, img2):
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+    vis = np.zeros((max(h1, h2), w1+w2, img1.shape[2]), np.uint8)
+    vis[:h1, :w1, :] = img1 
+    vis[:h2, w1:w1+w2, :] = img2 
+    #vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+    return vis
+    #cv2.imshow("test", vis)
 
 
 _BEHAVIOR_COLORS_ = dict(zip(list(data._BehaviorLabel_),
