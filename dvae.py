@@ -3,25 +3,7 @@
 
 # <markdowncell>
 
-# ##### Copyright 2018 The TensorFlow Authors.
-# 
-# Licensed under the Apache License, Version 2.0 (the "License").
-# 
-# # Convolutional VAE: An example with tf.keras and eager
-# 
-# <table class="tfo-notebook-buttons" align="left"><td>
-# <a target="_blank"  href="https://colab.research.google.com/github/tensorflow/tensorflow/blob/master/tensorflow/contrib/eager/python/examples/generative_examples/cvae.ipynb">
-#     <img src="https://www.tensorflow.org/images/colab_logo_32px.png" />Run in Google Colab</a>  
-# </td><td>
-# <a target="_blank"  href="https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/examples/generative_examples/cvae.ipynb"><img width=32px src="https://www.tensorflow.org/images/GitHub-Mark-32px.png" />View source on GitHub</a></td></table>
-
-# <markdowncell>
-
-# ![evolution of output during training](https://tensorflow.org/images/autoencoders/cvae.gif)
-# 
-# This notebook demonstrates how to generate images of handwritten digits using [tf.keras](https://www.tensorflow.org/programmers_guide/keras) and [eager execution](https://www.tensorflow.org/programmers_guide/eager) by training a Variational Autoencoder. (VAE, [[1]](https://arxiv.org/abs/1312.6114), [[2]](https://arxiv.org/abs/1401.4082)).
-# 
-
+# # DenseVAE: An example with tf.keras and eager
 
 # <codecell>
 
@@ -52,34 +34,22 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
 from som_vae.settings import config, skeleton
-from som_vae.helpers import video, plots
+from som_vae.helpers import video, plots, misc, jupyter
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
 from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
+# <codecell>
+
+jupyter.fix_layout()
+
 # <markdowncell>
 
 # ## Load the MNIST dataset
+# 
 # Each MNIST image is originally a vector of 784 integers, each of which is between 0-255 and represents the intensity of a pixel. We model each pixel with a Bernoulli distribution in our model, and we statically binarize the dataset.
-
-# <codecell>
-
-(train_images, _), (test_images, _) = tf.keras.datasets.mnist.load_data()
-
-# <codecell>
-
-train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
-test_images = test_images.reshape(test_images.shape[0], 28, 28, 1).astype('float32')
-
-# Normalizing the images to the range of [0., 1.]
-train_images /= 255.
-test_images /= 255.
-
-# Binarization
-train_images[train_images >= .5] = 1.
-train_images[train_images < .5] = 0.
-test_images[test_images >= .5] = 1.
-test_images[test_images < .5] = 0.
+# 
+# Remember they binarize the data previous.
 
 # <codecell>
 
@@ -149,14 +119,16 @@ TEST_BUF = len(data_test)
 
 # <codecell>
 
-train_dataset = tf.data.Dataset.from_tensor_slices(data_train, ).shuffle(TRAIN_BUF).batch(BATCH_SIZE)
+train_dataset = tf.data.Dataset.from_tensor_slices(data_train).shuffle(TRAIN_BUF).batch(BATCH_SIZE)
 test_dataset = tf.data.Dataset.from_tensor_slices(data_test).shuffle(TEST_BUF).batch(BATCH_SIZE)
+
+# <codecell>
+
+data_train.shape
 
 # <markdowncell>
 
 # ## Wire up the generative and inference network with *tf.keras.Sequential*
-# 
-# In our VAE example, we use two small ConvNets for the generative and inference network. Since these neural nets are small, we use `tf.keras.Sequential` to simplify our code. Let $x$ and $z$ denote the observation and latent variable respectively in the following descriptions. 
 # 
 # ### Generative Network
 # This defines the generative model which takes a latent encoding as input, and outputs the parameters for a conditional distribution of the observation, i.e. $p(x|z)$. Additionally, we use a unit Gaussian prior $p(z)$ for the latent variable.
@@ -178,6 +150,7 @@ class CVAE(tf.keras.Model):
         self.latent_dim = latent_dim
         self._input_shape = input_shape
         self._batch_size = batch_size
+        # `latent_dim + latent_dim` because of the splitting of the inference network's output
         self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape),
                                                   tf.keras.layers.Dense(256, activation=tf.nn.relu),
                                                   tf.keras.layers.Dense(128, activation=tf.nn.relu),
@@ -214,6 +187,11 @@ class CVAE(tf.keras.Model):
   
         return logits
 
+    def predict(self, x):
+        mean, logvar = self.encode(x)
+        z = model.reparameterize(mean, logvar)
+        return model.decode(z)
+
 # <markdowncell>
 
 # ## Define the loss function and the optimizer
@@ -243,8 +221,8 @@ def compute_loss(model, x):
     x_logit = model.decode(z)
   
     cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
-    print(cross_ent.shape)
-    logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
+    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
+    logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
     logpz = log_normal_pdf(z, 0., 0.)
     logqz_x = log_normal_pdf(z, mean, logvar)
     return -tf.reduce_mean(logpx_z + logpz - logqz_x)
@@ -260,33 +238,7 @@ def apply_gradients(optimizer, gradients, variables, global_step=None):
 
 # <codecell>
 
-z.shape
-
-# <codecell>
-
-mean.shape
-
-# <codecell>
-
-logvar.shape
-
-# <codecell>
-
-x_inf = model.inference_net(data_train[:19])
-
-# <codecell>
-
-x_inf.shape
-
-# <codecell>
-
-mean, logvar = model.encode(data_train[:10])
-z = model.reparameterize(mean, logvar)
-x_logit = model.decode(z)
-
-# <codecell>
-
-epochs = 10
+epochs = 400
 latent_dim = 16 
 
 num_examples_to_generate = 16
@@ -296,14 +248,6 @@ num_examples_to_generate = 16
 random_vector_for_generation = tf.random_normal(
     shape=[num_examples_to_generate, latent_dim])
 model = CVAE(latent_dim, input_shape=data_train.shape[1:], batch_size=BATCH_SIZE)
-
-# <codecell>
-
-model.inference_net.summary()
-
-# <codecell>
-
-model.generative_net.summary()
 
 # <codecell>
 
@@ -327,6 +271,7 @@ def generate_and_save_images(model, epoch, test_input):
 #generate_and_save_images(model, 0, random_vector_for_generation)
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 
+losses = []
 for epoch in range(1, epochs + 1):
     start_time = time.time()
     for train_x in train_dataset:
@@ -339,21 +284,30 @@ for epoch in range(1, epochs + 1):
         for test_x in test_dataset:
             loss(compute_loss(model, test_x))
         elbo = -loss.result()
-        display.clear_output(wait=False)
-        print('Epoch: {}, Test set ELBO: {}, '
-              'time elapse for current epoch {}'.format(epoch,
-                                                        elbo,
-                                                        end_time - start_time))
-        #generate_and_save_images(model, epoch, random_vector_for_generation)
+        losses += [elbo]
+        #display.clear_output(wait=False)
+        if epoch % 10 == 0:
+            print('Epoch: {:0>3}, Test set ELBO: {:0.3f}, '
+                  'time elapse for current epoch {:0.4f}'.format(epoch,
+                                                            elbo,
+                                                            end_time - start_time))
+            #generate_and_save_images(model, epoch, random_vector_for_generation)
 
 # <codecell>
 
-model.encode(data_train[1:2])
+plt.plot(losses)
 
 # <codecell>
 
-
+def _reverse_to_original_shape_(pos_data, input_shape=None):
+    if input_shape is None:
+        input_shape = (-1, config.NB_DIMS)
+        
+    return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
 # <codecell>
 
+pred_train = model.predict(data_train)
+pred_train_rev = _reverse_to_original_shape_(model.predict(data_train).numpy())
 
+plots.plot_comparing_joint_position_with_reconstructed(_reverse_to_original_shape_(data_train), pred_train_rev, validation_cut_off=nb_of_data_points)
