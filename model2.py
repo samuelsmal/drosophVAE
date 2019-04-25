@@ -54,6 +54,7 @@ from som_vae.settings import config, skeleton
 from som_vae.helpers import video, plots
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
+from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
     
 fix_layout()
 enable_logging()
@@ -73,27 +74,11 @@ enable_logging()
 
 # <codecell>
 
-from som_vae.helpers.misc import foldl
 from som_vae import settings
 
-joint_positions = settings.data.EXPERIMENTS\
-    .map(config.positional_data)\
-    .map(preprocessing._simple_checks_)\
-    .map(preprocessing._get_camera_of_interest_)\
-    .map(preprocessing._get_visible_legs_)\
-    .map(preprocessing.add_third_dimension)\
-    .map(preprocessing.get_only_first_legs)\
-    .to_list()
+joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
-joint_positions, normalisation_factors = preprocessing.normalize(np.vstack(joint_positions))
-
-# <codecell>
-
-# TODO for some reason some positions are missing
-frames_idx_with_labels = seq(settings.data.LABELLED_DATA).flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()[:len(joint_positions)]
-frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
-
-# <codecell>
+frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
 
 #frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
 frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
@@ -113,16 +98,6 @@ plots.ploting_frames(joint_positions - normalisation_factors)
 # <codecell>
 
 reload(somvae_model)
-
-# <markdowncell>
-
-# ## constant
-
-# <codecell>
-
-__TF_DEFAULT_SESSION_CONFIG__ = tf.ConfigProto()
-__TF_DEFAULT_SESSION_CONFIG__.gpu_options.allow_growth = True 
-__TF_DEFAULT_SESSION_CONFIG__.gpu_options.polling_inactive_delay_msecs = 10
 
 # <markdowncell>
 
@@ -160,19 +135,20 @@ def get_data_generator(data_train, labels_train, data_val, labels_val, time_seri
             labels = labels_val.copy()
         
         while True:
+            # TODO does this make sense? if there is no time relationship -> yes, but if not?
             indices = np.random.permutation(np.arange(len(images)))
             images = images[indices]
             labels = labels[indices]
 
-            if time_series:
-                for i, image in enumerate(images):
-                    start_image = image
-                    end_image = images[np.random.choice(np.where(labels == (labels[i] + 1) % 10)[0])]
-                    interpolation = interpolate_arrays(start_image, end_image, batch_size)
-                    yield interpolation + np.random.normal(scale=0.01, size=interpolation.shape)
-            else:
-                for i in range(len(images)//batch_size):
-                    yield images[i*batch_size:(i+1)*batch_size]
+            #if time_series:
+            #    for i, image in enumerate(images):
+            #        start_image = image
+            #        end_image = images[np.random.choice(np.where(labels == (labels[i] + 1) % 10)[0])]
+            #        interpolation = interpolate_arrays(start_image, end_image, batch_size)
+            #        yield interpolation + np.random.normal(scale=0.01, size=interpolation.shape)
+            #else:
+            for i in range(len(images)//batch_size):
+                yield images[i*batch_size:(i+1)*batch_size]
 
     return batch_generator
 
@@ -204,7 +180,7 @@ def train_model(model, x, lr_val, num_epochs, patience, batch_size, logdir,
     saver = tf.train.Saver(keep_checkpoint_every_n_hours=2.)
     summaries = tf.summary.merge_all()
     
-    with tf.Session(config=__TF_DEFAULT_SESSION_CONFIG__) as sess:
+    with tf.Session(config=_TF_DEFAULT_SESSION_CONFIG_) as sess:
         sess.run(tf.global_variables_initializer())
         patience_count = 0
         train_losses = []
@@ -305,8 +281,8 @@ def evaluate_model(model, x, modelpath, batch_size, data, labels=None, tf_sessio
             purity = compute_purity(cluster_assignments.tolist(), labels[:len(cluster_assignments)])
 
     results = {}
-    #results["NMI"] = nmi 
-    #results["Purity"] = purity 
+    results["NMI"] = nmi 
+    results["Purity"] = purity 
     results["MSE (encoding)"] = mse_encoding 
     results["MSE (embedding)"] = mse_embedding 
     results["nb of used clusters"] = len(np.unique(cluster_assignments))
@@ -346,9 +322,10 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
         input_channels = __N_INPUT__
         x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels, 1]) # for image
     else:
-        input_length = 1
+        input_length = config['input_length']
         #input_channels = __N_INPUT__ * __NB_DIMS__
         input_channels = config['input_channels']
+        #x = tf.placeholder(tf.float32, shape=[None, input_length, input_channels]) 
         x = tf.placeholder(tf.float32, shape=[None, input_channels]) 
         
     data_generator = get_data_generator(data_train=X_train, data_val=X_val, labels_train=y_train, labels_val=y_val,time_series=time_series)
@@ -382,16 +359,16 @@ def train_and_evaluate_model(X_train, X_val, y_train, y_val, latent_dim, som_dim
 
 ## config
 
-_name_ = "adapting_latent_and_act_fn_relu"
-_latent_dim_ = 8
+_name_ = "with_batch_normalization_down_to_2_dim_latent"
+_latent_dim_ = 16 
 _som_dim = [8,8]
 
 # TODO add hash of config to modelpath
 
 som_vae_config = {
-    "num_epochs": 400,
+    "num_epochs": 100,
     "patience": 100,
-    "batch_size": 50, # len(joint_positions), # if time_series then each batch should be a time series
+    "batch_size": 10, # len(joint_positions), # if time_series then each batch should be a time series
     "latent_dim": _latent_dim_,
     "som_dim": _som_dim,
     "learning_rate": 0.0005,
@@ -413,7 +390,8 @@ som_vae_config = {
     "time_series": False,
     "image_like_input": False,
     "activation_fn": "relu", # or relu -> with normalisation layer?
-    "input_channels": joint_positions.shape[1] * config.NB_DIMS
+    "input_channels": joint_positions.shape[1] * config.NB_DIMS,
+    "input_length": 1
 }
 
 # todo add git commit hash to config name
@@ -443,34 +421,44 @@ with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
 
 # <codecell>
 
+def to_time_series(data, sequence_length=som_vae_config['batch_size']):
+    for i in range(len(data)):
+        if i + sequence_length <= len(data):
+            yield data[i:i+sequence_length]
+
+# <codecell>
+
 # flatten the data
 reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1)
-
-
-# scaling the data to be in [0, 1]
-# this is due to the sigmoid activation function in the reconstruction
-scaler = MinMaxScaler()
-#resh = scaler.fit_transform(resh)
-
-# <codecell>
-
-reshaped_joint_position.shape
-
-# <codecell>
+print(f"total number of input data:{reshaped_joint_position.shape}")
 
 assert np.product(reshaped_joint_position.shape[1:]) > som_vae_config['latent_dim'],\
        'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
 
-# <codecell>
-
+if som_vae_config['time_series']:
+    # duplicating the elements, e.g.: [0, 1, 2], [1, 2, 3], [2, 3, 4], ...
+    # this has a sequence length of 3
+    _time_series_idx_ = list(to_time_series(range(len(joint_positions))))
+    _jp = np.concatenate([reshaped_joint_position[idx].reshape(1, -1, 30) for idx in _time_series_idx_], axis=0)
+else:
+    _jp = reshaped_joint_position 
+    
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
 # train - test split
-nb_of_data_points = int(joint_positions.shape[0] * 0.7)
+nb_of_data_points = int(_jp.shape[0] * 0.7)
 
-data_train = scaler.fit_transform(reshaped_joint_position[:nb_of_data_points])
-data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
+scaler = MinMaxScaler()
+# scaling the data to be in [0, 1]
+# this is due to the sigmoid activation function in the reconstruction
+#resh = scaler.fit_transform(resh)
+data_train = scaler.fit_transform(_jp[:nb_of_data_points])
+data_test = scaler.transform(_jp[nb_of_data_points:])
+
 # just generating some labels, no clue what they are for except validation?
-labels = np.array(list(range(reshaped_joint_position.shape[0])))
+labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
+
+if som_vae_config['time_series']:
+    labels = np.concatenate([labels[idx].reshape(1, -1, 1) for idx in _time_series_idx_], axis=0)
 
 data = {
   "X_train": data_train,
@@ -479,12 +467,10 @@ data = {
   "y_val": labels[nb_of_data_points:]
 }
 
-#data = {
-#  "X_val": data_train,
-#  "y_val": labels,
-#  "X_train": data_train,
-#  "y_train": labels
-#}
+
+# <codecell>
+
+resha
 
 # <markdowncell>
 
@@ -497,7 +483,7 @@ reload(somvae_model)
 tf.reset_default_graph()
 
 _args = inspect.getfullargspec(train_and_evaluate_model).args
-res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:som_vae_config[k] for k in _args if k in som_vae_config}, **data, **{"config": som_vae_config}})
+res, mdl, losses, res_val = train_and_evaluate_model(**{**{k:som_vae_config[k] for k in _args if k in som_vae_config}, **data, "config": som_vae_config})
 
 # <codecell>
 
@@ -514,14 +500,9 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(res_val[3])
 
 # <codecell>
 
-reload(plots)
 f =plots.plot_losses(losses)
 plots.plot_latent_frame_distribution(res[2], nb_bins=_latent_dim_)
 plots.plot_cluster_assignment_over_time(res[2])
-
-# <codecell>
-
-reload(plots)
 
 # <codecell>
 
@@ -678,7 +659,6 @@ seen_labels = training_frames.label.unique()
 
 # <codecell>
 
-cur_frame_id = 10
 _cs = sns.color_palette(n_colors=len(seen_labels))
 
 fig = plt.figure(figsize=(10, 10))
@@ -691,8 +671,6 @@ for l, c in behaviour_colours.items():
     # c=[c] since matplotlib asks for it
     plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
     
-cur_color = behaviour_colours[_all_frames_.loc[cur_frame_id, 'label']]
-plt.scatter(X_embedded[cur_frame_id, 0], X_embedded[cur_frame_id, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
 plt.legend()
 plt.title('simple t-SNE on latent space');
 
@@ -710,7 +688,13 @@ _p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in
 _embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels) for i in range(len(X_embedded)))
 frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_img in zip(_p, _embedding_imgs))
 
-video._save_frames_('./tryout.mp4', frames)
+embedding_with_recon_path = f"../neural_clustering_data/videos/{som_vae_config['ex_name']}_embedding_with_recon.mp4"
+video._save_frames_(embedding_with_recon_path, frames)
+display_video(embedding_with_recon_path)
+
+# <codecell>
+
+
 display_video('./tryout.mp4')
 
 # <markdowncell>

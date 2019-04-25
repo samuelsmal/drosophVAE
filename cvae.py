@@ -47,6 +47,15 @@ import matplotlib.pyplot as plt
 import PIL
 import imageio
 from IPython import display
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+from som_vae.helpers.misc import extract_args, chunks, foldl
+from som_vae.helpers.jupyter import fix_layout, display_video
+from som_vae.settings import config, skeleton
+from som_vae.helpers import video, plots
+from som_vae import preprocessing
+from som_vae.helpers.logging import enable_logging
+from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <markdowncell>
 
@@ -74,10 +83,65 @@ test_images[test_images < .5] = 0.
 
 # <codecell>
 
-TRAIN_BUF = 60000
+from som_vae import settings
+from som_vae import preprocessing
+
+joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
+
+frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
+
+#frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
+frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
+
+joint_positions = joint_positions[frames_of_interest]
+frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
+
+# <codecell>
+
+# flatten the data
+reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1).astype(np.float32)
+
+
+# scaling the data to be in [0, 1]
+# this is due to the sigmoid activation function in the reconstruction
+scaler = MinMaxScaler()
+#resh = scaler.fit_transform(resh)
+
+print(f"total number of input data:{reshaped_joint_position.shape}")
+
+
+#if som_vae_config['time_series']:
+#    _time_series_idx_ = list(to_time_series(range(len(joint_positions))))
+#    _jp = np.concatenate([joint_positions[idx].reshape(1, -1, 30) for idx in _time_series_idx_], axis=0)
+#else:
+#    _jp = joint_positions
+#    
+#nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
+# train - test split
+nb_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
+#
+data_train = scaler.fit_transform(reshaped_joint_position[:nb_of_data_points])
+data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
+# just generating some labels, no clue what they are for except validation?
+#labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
+
+#if som_vae_config['time_series']:
+#    labels = np.concatenate([labels[idx].reshape(1, -1, 1) for idx in _time_series_idx_], axis=0)
+
+#data = {
+#  "X_train": data_train,
+#  "X_val": data_test,
+#  "y_train": labels[:nb_of_data_points],
+#  "y_val": labels[nb_of_data_points:]
+#}
+
+
+# <codecell>
+
+TRAIN_BUF = len(data_train) 
 BATCH_SIZE = 100
 
-TEST_BUF = 10000
+TEST_BUF = len(data_test) 
 
 # <markdowncell>
 
@@ -85,8 +149,8 @@ TEST_BUF = 10000
 
 # <codecell>
 
-train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(TRAIN_BUF).batch(BATCH_SIZE)
-test_dataset = tf.data.Dataset.from_tensor_slices(test_images).shuffle(TEST_BUF).batch(BATCH_SIZE)
+train_dataset = tf.data.Dataset.from_tensor_slices(data_train, ).shuffle(TRAIN_BUF).batch(BATCH_SIZE)
+test_dataset = tf.data.Dataset.from_tensor_slices(data_test).shuffle(TEST_BUF).batch(BATCH_SIZE)
 
 # <markdowncell>
 
@@ -109,65 +173,47 @@ test_dataset = tf.data.Dataset.from_tensor_slices(test_images).shuffle(TEST_BUF)
 # <codecell>
 
 class CVAE(tf.keras.Model):
-  def __init__(self, latent_dim):
-    super(CVAE, self).__init__()
-    self.latent_dim = latent_dim
-    self.inference_net = tf.keras.Sequential(
-      [
-          tf.keras.layers.InputLayer(input_shape=(28, 28, 1)),
-          tf.keras.layers.Conv2D(
-              filters=32, kernel_size=3, strides=(2, 2), activation=tf.nn.relu),
-          tf.keras.layers.Conv2D(
-              filters=64, kernel_size=3, strides=(2, 2), activation=tf.nn.relu),
-          tf.keras.layers.Flatten(),
-          # No activation
-          tf.keras.layers.Dense(latent_dim + latent_dim),
-      ]
-    )
-
-    self.generative_net = tf.keras.Sequential(
-        [
-          tf.keras.layers.InputLayer(input_shape=(latent_dim,)),
-          tf.keras.layers.Dense(units=7*7*32, activation=tf.nn.relu),
-          tf.keras.layers.Reshape(target_shape=(7, 7, 32)),
-          tf.keras.layers.Conv2DTranspose(
-              filters=64,
-              kernel_size=3,
-              strides=(2, 2),
-              padding="SAME",
-              activation=tf.nn.relu),
-          tf.keras.layers.Conv2DTranspose(
-              filters=32,
-              kernel_size=3,
-              strides=(2, 2),
-              padding="SAME",
-              activation=tf.nn.relu),
-          # No activation
-          tf.keras.layers.Conv2DTranspose(
-              filters=1, kernel_size=3, strides=(1, 1), padding="SAME"),
-        ]
-    )
-
-  def sample(self, eps=None):
-    if eps is None:
-      eps = tf.random_normal(shape=(100, self.latent_dim))
-    return self.decode(eps, apply_sigmoid=True)
-
-  def encode(self, x):
-    mean, logvar = tf.split(self.inference_net(x), num_or_size_splits=2, axis=1)
-    return mean, logvar
-
-  def reparameterize(self, mean, logvar):
-    eps = tf.random_normal(shape=mean.shape)
-    return eps * tf.exp(logvar * .5) + mean
-
-  def decode(self, z, apply_sigmoid=False):
-    logits = self.generative_net(z)
-    if apply_sigmoid:
-      probs = tf.sigmoid(logits)
-      return probs
-
-    return logits
+    def __init__(self, latent_dim, input_shape, batch_size):
+        super(CVAE, self).__init__()
+        self.latent_dim = latent_dim
+        self._input_shape = input_shape
+        self._batch_size = batch_size
+        self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape),
+                                                  tf.keras.layers.Dense(256, activation=tf.nn.relu),
+                                                  tf.keras.layers.Dense(128, activation=tf.nn.relu),
+                                                  tf.keras.layers.Dense(64, activation=tf.nn.relu),
+                                                  tf.keras.layers.Dense(32, activation=tf.nn.relu),
+                                                  tf.keras.layers.Dense(latent_dim + latent_dim, activation=tf.nn.relu),
+                                                  #tf.keras.layers.Dense(latent_dim + latent_dim), 
+                                                 ])
+    
+        self.generative_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=(latent_dim,)),
+                                                   tf.keras.layers.Dense(32, activation=tf.nn.relu),
+                                                   tf.keras.layers.Dense(64, activation=tf.nn.relu),
+                                                   tf.keras.layers.Dense(128, activation=tf.nn.relu),
+                                                   tf.keras.layers.Dense(256, activation=tf.nn.relu),
+                                                   tf.keras.layers.Dense(input_shape[0], activation=tf.nn.sigmoid)])
+    
+    def sample(self, eps=None):
+        if eps is None:
+            eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
+        return self.decode(eps, apply_sigmoid=True)
+  
+    def encode(self, x):
+        mean, logvar = tf.split(self.inference_net(x), num_or_size_splits=2, axis=1)
+        return mean, logvar
+  
+    def reparameterize(self, mean, logvar):
+        eps = tf.random_normal(shape=mean.shape)
+        return eps * tf.exp(logvar * .5) + mean
+  
+    def decode(self, z, apply_sigmoid=False):
+        logits = self.generative_net(z)
+        if apply_sigmoid:
+            probs = tf.sigmoid(logits)
+            return probs
+  
+        return logits
 
 # <markdowncell>
 
@@ -187,10 +233,10 @@ class CVAE(tf.keras.Model):
 # <codecell>
 
 def log_normal_pdf(sample, mean, logvar, raxis=1):
-  log2pi = tf.log(2. * np.pi)
-  return tf.reduce_sum(
-      -.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi),
-      axis=raxis)
+    log2pi = tf.log(2. * np.pi)
+    return tf.reduce_sum(
+        -.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi),
+        axis=raxis)
 
 def compute_loss(model, x):
     mean, logvar = model.encode(x)
@@ -210,57 +256,76 @@ def compute_gradients(model, x):
 
 optimizer = tf.train.AdamOptimizer(1e-4)
 def apply_gradients(optimizer, gradients, variables, global_step=None):
-  optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
-
-# <markdowncell>
-
-# ## Training
-# 
-# * We start by iterating over the dataset
-# * During each iteration, we pass the image to the encoder to obtain a set of mean and log-variance parameters of the approximate posterior $q(z|x)$
-# * We then apply the *reparameterization trick* to sample from $q(z|x)$
-# * Finally, we pass the reparameterized samples to the decoder to obtain the logits of the generative distribution $p(x|z)$
-# * **Note:** Since we use the dataset loaded by keras with 60k datapoints in the training set and 10k datapoints in the test set, our resulting ELBO on the test set is slightly higher than reported results in the literature which uses dynamic binarization of Larochelle's MNIST.
-# 
-# ## Generate Images
-# 
-# * After training, it is time to generate some images
-# * We start by sampling a set of latent vectors from the unit Gaussian prior distribution $p(z)$
-# * The generator will then convert the latent sample $z$ to logits of the observation, giving a distribution $p(x|z)$
-# * Here we plot the probabilities of Bernoulli distributions
-
+    optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
 
 # <codecell>
 
-epochs = 100
-latent_dim = 50
+z.shape
+
+# <codecell>
+
+mean.shape
+
+# <codecell>
+
+logvar.shape
+
+# <codecell>
+
+x_inf = model.inference_net(data_train[:19])
+
+# <codecell>
+
+x_inf.shape
+
+# <codecell>
+
+mean, logvar = model.encode(data_train[:10])
+z = model.reparameterize(mean, logvar)
+x_logit = model.decode(z)
+
+# <codecell>
+
+epochs = 10
+latent_dim = 16 
+
 num_examples_to_generate = 16
 
 # keeping the random vector constant for generation (prediction) so
 # it will be easier to see the improvement.
 random_vector_for_generation = tf.random_normal(
     shape=[num_examples_to_generate, latent_dim])
-model = CVAE(latent_dim)
+model = CVAE(latent_dim, input_shape=data_train.shape[1:], batch_size=BATCH_SIZE)
+
+# <codecell>
+
+model.inference_net.summary()
+
+# <codecell>
+
+model.generative_net.summary()
+
+# <codecell>
+
+from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <codecell>
 
 def generate_and_save_images(model, epoch, test_input):
-  predictions = model.sample(test_input)
-  fig = plt.figure(figsize=(4,4))
+    predictions = model.sample(test_input)
+    fig = plt.figure(figsize=(4,4))
+  
+    for i in range(predictions.shape[0]):
+        plt.subplot(4, 4, i+1)
+        plt.imshow(predictions[i, :, :, 0], cmap='gray')
+        plt.axis('off')
+  
+    # tight_layout minimizes the overlap between 2 sub-plots
+    #plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
+    plt.show()
 
-  for i in range(predictions.shape[0]):
-      plt.subplot(4, 4, i+1)
-      plt.imshow(predictions[i, :, :, 0], cmap='gray')
-      plt.axis('off')
-
-  # tight_layout minimizes the overlap between 2 sub-plots
-  #plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
-  plt.show()
-
-generate_and_save_images(model, 0, random_vector_for_generation)
-session_config = tf.ConfigProto()
-session_config.gpu_options.allow_growth = True
-sess = tf.InteractiveSession(config=session_config)
+#generate_and_save_images(model, 0, random_vector_for_generation)
+sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 
 for epoch in range(1, epochs + 1):
     start_time = time.time()
@@ -279,52 +344,16 @@ for epoch in range(1, epochs + 1):
               'time elapse for current epoch {}'.format(epoch,
                                                         elbo,
                                                         end_time - start_time))
-        generate_and_save_images(model, epoch, random_vector_for_generation)
-
-# <markdowncell>
-
-# ### Display an image using the epoch number
+        #generate_and_save_images(model, epoch, random_vector_for_generation)
 
 # <codecell>
 
-def display_image(epoch_no):
-  return PIL.Image.open('image_at_epoch_{:04d}.png'.format(epoch_no))
+model.encode(data_train[1:2])
 
 # <codecell>
 
-display_image(epochs)  # Display images
 
-# <markdowncell>
-
-# ### Generate a GIF of all the saved images.
 
 # <codecell>
 
-with imageio.get_writer('cvae.gif', mode='I') as writer:
-  filenames = glob.glob('image*.png')
-  filenames = sorted(filenames)
-  last = -1
-  for i,filename in enumerate(filenames):
-    frame = 2*(i**0.5)
-    if round(frame) > round(last):
-      last = frame
-    else:
-      continue
-    image = imageio.imread(filename)
-    writer.append_data(image)
-  image = imageio.imread(filename)
-  writer.append_data(image)
-    
-# this is a hack to display the gif inside the notebook
-os.system('cp cvae.gif cvae.gif.png')
 
-display.Image(filename="cvae.gif.png")
-
-# <markdowncell>
-
-# To downlod the animation from Colab uncomment the code below:
-
-# <codecell>
-
-#from google.colab import files
-#files.download('cvae.gif')
