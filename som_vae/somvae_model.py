@@ -210,29 +210,6 @@ class SOMVAE:
 
 
     @lazy_scope
-    def z_e(self):
-        """Computes the latent encodings of the inputs."""
-        if self.image_like_input:
-            with tf.variable_scope("encoder"):
-                h_conv1 = tf.nn.relu(conv2d(self.inputs, [4,4,1,256], "conv1"))
-                h_pool1 = max_pool_2x2(h_conv1)
-                h_conv2 = tf.nn.relu(conv2d(h_pool1, [4,4,256,256], "conv2"))
-                h_pool2 = max_pool_2x2(h_conv2)
-                flat_size = 7*7*256
-                h_flat = tf.reshape(h_pool2, [-1, flat_size])
-                _z_e = tf.keras.layers.Dense(self.latent_dim)(h_flat)
-        else:
-            with tf.variable_scope("encoder"):
-                h_1     = tf.keras.layers.Dense(256,             activation=self.config['activation_fn'])(self.inputs)
-                h_2     = tf.keras.layers.Dense(128,             activation=self.config['activation_fn'])(h_1)
-                h_z_e_3 = tf.keras.layers.Dense(64,              activation=self.config['activation_fn'])(h_2)
-                h_z_e_4 = tf.keras.layers.Dense(32,              activation=self.config['activation_fn'])(h_z_e_3)
-                h_z_e_5 = tf.keras.layers.Dense(16,              activation=self.config['activation_fn'])(h_z_e_4)
-                _z_e    = tf.keras.layers.Dense(self.latent_dim, activation=self.config['activation_fn'])(h_z_e_5)
-        return _z_e
-
-
-    @lazy_scope
     def z_e_old(self):
         """Aggregates the encodings of the respective previous time steps."""
         z_e_old = tf.concat([self.z_e[0:1], self.z_e[:-1]], axis=0)
@@ -242,6 +219,10 @@ class SOMVAE:
     @lazy_scope
     def z_dist_flat(self):
         """Computes the distances between the encodings and the embeddings."""
+        print(self.embeddings.shape)
+        print('shape expanded ze', tf.expand_dims(tf.expand_dims(self.z_e, 1), 1).shape)
+        print('shape expanded em', tf.expand_dims(self.embeddings, 0))
+
         z_dist = tf.squared_difference(tf.expand_dims(tf.expand_dims(self.z_e, 1), 1), tf.expand_dims(self.embeddings, 0))
         z_dist_red = tf.reduce_sum(z_dist, axis=-1)
         z_dist_flat = tf.reshape(z_dist_red, [self.batch_size, -1])
@@ -298,6 +279,41 @@ class SOMVAE:
         z_q_neighbors = tf.stack([self.z_q, z_q_up, z_q_down, z_q_right, z_q_left], axis=1)
         return z_q_neighbors
 
+    @lazy_scope
+    def z_e(self):
+        """Computes the latent encodings of the inputs."""
+        if self.image_like_input:
+            with tf.variable_scope("encoder"):
+                h_conv1 = tf.nn.relu(conv2d(self.inputs, [4,4,1,256], "conv1"))
+                h_pool1 = max_pool_2x2(h_conv1)
+                h_conv2 = tf.nn.relu(conv2d(h_pool1, [4,4,256,256], "conv2"))
+                h_pool2 = max_pool_2x2(h_conv2)
+                flat_size = 7*7*256
+                h_flat = tf.reshape(h_pool2, [-1, flat_size])
+                _z_e = tf.keras.layers.Dense(self.latent_dim)(h_flat)
+        else:
+            _act_fn = self.config['activation_fn']
+            with tf.variable_scope("encoder"):
+                h_encod_0      = tf.keras.layers.Dense(256, activation=_act_fn)(self.inputs)
+                h_norm_encod_0 = tf.keras.layers.BatchNormalization()(h_encod_0)
+                h_encod_1      = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_encod_0)
+                h_norm_encod_1 = tf.keras.layers.BatchNormalization()(h_encod_1)
+                h_encod_2      = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_encod_1)
+                h_norm_encod_2 = tf.keras.layers.BatchNormalization()(h_encod_2)
+                #h_encod_3      = tf.keras.layers.Dense(32,  activation=_act_fn)(h_norm_encod_2)
+                #h_norm_encod_3 = tf.keras.layers.BatchNormalization()(h_encod_3)
+                #h_encod_4      = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_3)
+                #h_norm_encod_4 = tf.keras.layers.BatchNormalization()(h_encod_4)
+                #h_encod_5      = tf.keras.layers.Dense(8,   activation=_act_fn)(h_norm_encod_4)
+                #h_norm_encod_5 = tf.keras.layers.BatchNormalization()(h_encod_5)
+                #h_encod_6      = tf.keras.layers.Dense(4,   activation=_act_fn)(h_norm_encod_5)
+                #h_norm_encod_6 = tf.keras.layers.BatchNormalization()(h_encod_6)
+                h_encod_7      = tf.keras.layers.Dense(self.latent_dim,
+                                                       activation=_act_fn)(h_norm_encod_2)
+                _z_e           = tf.keras.layers.BatchNormalization()(h_encod_7)
+        print(_z_e.shape)
+        return _z_e
+
 
     @lazy_scope
     def x_hat_embedding(self):
@@ -313,13 +329,23 @@ class SOMVAE:
                 h_deconv2 = tf.nn.sigmoid(conv2d(h_unpool2, [4,4,256,1], "deconv2"))
                 x_hat = h_deconv2
         else:
+            _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_x_embed_0 = tf.keras.layers.Dense(16,                  activation=self.config['activation_fn'])(self.z_q)
-                h_x_embed_1 = tf.keras.layers.Dense(32,                  activation=self.config['activation_fn'])(h_x_embed_0)
-                h_x_embed_2 = tf.keras.layers.Dense(64,                  activation=self.config['activation_fn'])(h_x_embed_1)
-                h_x_embed_3 = tf.keras.layers.Dense(128,                 activation=self.config['activation_fn'])(h_x_embed_2)
-                h_x_embed_4 = tf.keras.layers.Dense(256,                 activation=self.config['activation_fn'])(h_x_embed_3)
-                x_hat       = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_embed_4)
+                #h_x_embed_0    = tf.keras.layers.Dense(4,  activation=_act_fn)(self.z_q)
+                #h_norm_embed_0 = tf.keras.layers.BatchNormalization()(h_x_embed_0)
+                #h_x_embed_1    = tf.keras.layers.Dense(8,  activation=_act_fn)(h_norm_embed_0)
+                #h_norm_embed_1 = tf.keras.layers.BatchNormalization()(h_x_embed_1)
+                #h_x_embed_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_embed_1)
+                #h_norm_embed_2 = tf.keras.layers.BatchNormalization()(h_x_embed_1)
+                h_x_embed_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_q)
+                h_norm_embed_3 = tf.keras.layers.BatchNormalization()(h_x_embed_3)
+                h_x_embed_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_embed_3)
+                h_norm_embed_4 = tf.keras.layers.BatchNormalization()(h_x_embed_4)
+                h_x_embed_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_embed_4)
+                h_norm_embed_5 = tf.keras.layers.BatchNormalization()(h_x_embed_5)
+                h_x_embed_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_norm_embed_5)
+                h_norm_embed_6 = tf.keras.layers.BatchNormalization()(h_x_embed_6)
+                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_norm_embed_6)
 
         return x_hat
 
@@ -338,13 +364,23 @@ class SOMVAE:
                 h_deconv2 = tf.nn.sigmoid(conv2d(h_unpool2, [4,4,256,1], "deconv2"))
                 x_hat = h_deconv2
         else:
+            _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_x_encod_0 = tf.keras.layers.Dense(16,                  activation=self.config['activation_fn'])(self.z_e)
-                h_x_encod_1 = tf.keras.layers.Dense(32,                  activation=self.config['activation_fn'])(h_x_encod_0)
-                h_x_encod_2 = tf.keras.layers.Dense(64,                  activation=self.config['activation_fn'])(h_x_encod_1)
-                h_x_encod_3 = tf.keras.layers.Dense(128,                 activation=self.config['activation_fn'])(h_x_encod_2)
-                h_x_encod_4 = tf.keras.layers.Dense(256,                 activation=self.config['activation_fn'])(h_x_encod_3)
-                x_hat       = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_encod_4)
+                #h_x_encod_0    = tf.keras.layers.Dense(4,  activation=_act_fn)(self.z_e)
+                #h_norm_encod_0 = tf.keras.layers.BatchNormalization()(h_x_encod_0)
+                #h_x_encod_1    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_0)
+                #h_norm_encod_1 = tf.keras.layers.BatchNormalization()(h_x_encod_1)
+                #h_x_encod_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_1)
+                #h_norm_encod_2 = tf.keras.layers.BatchNormalization()(h_x_encod_2)
+                h_x_encod_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_e)
+                h_norm_encod_3 = tf.keras.layers.BatchNormalization()(h_x_encod_3)
+                h_x_encod_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_encod_3)
+                h_norm_encod_4 = tf.keras.layers.BatchNormalization()(h_x_encod_4)
+                h_x_encod_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_encod_4)
+                h_norm_encod_5 = tf.keras.layers.BatchNormalization()(h_x_encod_5)
+                h_x_encod_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_norm_encod_5)
+                h_norm_encod_6 = tf.keras.layers.BatchNormalization()(h_x_encod_6)
+                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_norm_encod_6)
         return x_hat
 
 

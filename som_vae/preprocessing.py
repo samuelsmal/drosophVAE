@@ -1,6 +1,7 @@
 import logging
 import pickle
 from functools import reduce
+from functional import seq
 
 
 import numpy as np
@@ -99,3 +100,23 @@ def normalize_pose(points3d, median3d=False):
             for j in range(np.shape(points3d)[2]): #xyz
                 points3d[:,i,j] = normalize_ts(points3d[:,i,j])
     return points3d
+
+
+def get_data_and_normalization(data):
+    ret = seq(data).map(config.positional_data)\
+                    .map(_simple_checks_)\
+                    .map(_get_camera_of_interest_)\
+                    .map(_get_visible_legs_)\
+                    .map(add_third_dimension)\
+                    .map(get_only_first_legs)\
+                    .to_list()
+
+    return normalize(np.vstack(ret))
+
+
+def get_frames_with_idx_and_labels(data):
+    frames_idx_with_labels = seq(data)\
+        .flat_map(lambda x: [(i, x.label) for i in range(*x.sequence)]).to_pandas()
+    frames_idx_with_labels.columns = ['frame_id_in_experiment', 'label']
+
+    return frames_idx_with_labels
