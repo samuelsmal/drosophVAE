@@ -183,8 +183,7 @@ class CVAE(tf.keras.Model):
                                                   tf.keras.layers.Dense(128, activation=tf.nn.relu),
                                                   tf.keras.layers.Dense(64, activation=tf.nn.relu),
                                                   tf.keras.layers.Dense(32, activation=tf.nn.relu),
-                                                  tf.keras.layers.Dense(latent_dim + latent_dim, activation=tf.nn.relu),
-                                                  #tf.keras.layers.Dense(latent_dim + latent_dim), 
+                                                  tf.keras.layers.Dense(latent_dim + latent_dim),
                                                  ])
     
         self.generative_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=(latent_dim,)),
@@ -192,7 +191,7 @@ class CVAE(tf.keras.Model):
                                                    tf.keras.layers.Dense(64, activation=tf.nn.relu),
                                                    tf.keras.layers.Dense(128, activation=tf.nn.relu),
                                                    tf.keras.layers.Dense(256, activation=tf.nn.relu),
-                                                   tf.keras.layers.Dense(input_shape[0], activation=tf.nn.sigmoid)])
+                                                   tf.keras.layers.Dense(input_shape[0])])
     
     def sample(self, eps=None):
         if eps is None:
@@ -244,6 +243,7 @@ def compute_loss(model, x):
     x_logit = model.decode(z)
   
     cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
+    print(cross_ent.shape)
     logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
     logpz = log_normal_pdf(z, 0., 0.)
     logqz_x = log_normal_pdf(z, mean, logvar)
