@@ -25,6 +25,9 @@ FLY_ID = "Fly2"
 if get_hostname() == 'upramdyapc6':
     __DATA_ROOT__ = "/home/samuel/"
     __EXPERIMENT_ROOT__ =  "/ramdya-nas/SVB/experiments"
+elif get_hostname() == 'contosam':
+    __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
+    __EXPERIMENT_ROOT__ =  "/home/sam/Dropbox"
 else:
     __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
     __EXPERIMENT_ROOT__ = f"{__DATA_ROOT__}/experiments"
