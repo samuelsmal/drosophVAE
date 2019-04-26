@@ -1,4 +1,5 @@
-import seaborn
+import numpy as np
+import seaborn as sns
 import matplotlib.pyplot as plt
 
 from som_vae.settings import config, skeleton
@@ -75,7 +76,7 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
         #plt.legend(loc='lower right')
         plt.suptitle(_get_leg_name_(leg))
 
-def plot_losses(losses, legend=None):
+def plot_losses(losses, legend=None, title=None):
     plt.figure(figsize=(15, 8))
     if legend is None:
         legend = ['train', 'test', 'test_recon']
@@ -93,8 +94,9 @@ def plot_losses(losses, legend=None):
 
     fig.legend()
     fig.tight_layout()
-    #fig.title('loss')
-
+    plt.title('loss')
+    if title is not None:
+        plt.title(f"loss with {title}")
     return fig
 
 
@@ -112,3 +114,30 @@ def plot_cluster_assignment_over_time(cluster_assignments):
     plt.title("cluster assignments over time")
     plt.ylabel("index of SOM-embeddings")
     plt.xlabel("frame")
+
+
+def plot_reconstructed_angle_data(real_data, reconstructed_data, columns):
+    _colors = sns.color_palette(n_colors=2)
+
+    fig, axs = plt.subplots(nrows=2, ncols=real_data.shape[1], figsize=(30, 5))
+    for a in range(real_data.shape[1]):
+        axs[0][a].set_title(f"angle nb: {columns[a]}")
+        axs[0][a].plot(real_data[:,a], c=_colors[0])
+        axs[1][a].plot(reconstructed_data.reshape(-1, np.product(reconstructed_data.shape[1:]))[:,a], c=_colors[1])
+
+    axs[0][0].set_ylabel('real')
+    axs[1][0].set_ylabel('reconstructed')
+
+
+    fig.suptitle('real vs reconstructed angle data')
+    
+    return fig
+
+
+def plot_angle_columns(data, columns):
+    fig, axs = plt.subplots(nrows=1, ncols=len(columns), figsize=(30, 5))
+    for i, c in enumerate(columns):
+        axs[i].set_title(f"angle nb: {c}")
+        axs[i].plot(data[:,c])
+        
+    return fig

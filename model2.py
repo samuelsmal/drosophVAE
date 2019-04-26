@@ -99,6 +99,80 @@ if False:
 
 # <markdowncell>
 
+# ## loading of 3d data
+
+# <codecell>
+
+def angle_three_points(a, b, c):
+    """
+    Given a set of any 3 points, (a,b,c), returns the angle ba^bc.
+    """
+    ba = a - b
+    bc = c - b
+ 
+    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    angle = np.arccos(cosine_angle)
+    return angle
+
+# <codecell>
+
+from som_vae.settings.config import positional_data
+
+def convert_3d_to_angle(data):
+    data_angle = np.zeros((data.shape[0], data.shape[1]), dtype=np.float32)
+    for img_id in range(data.shape[0]):
+        for j_id in range(1, data.shape[1]-1):
+            if skeleton.is_tarsus_tip(j_id) or skeleton.is_stripe(j_id) or skeleton.is_antenna(j_id):
+                continue
+            data_angle[img_id, j_id] = angle_three_points(
+                data[img_id, j_id - 1, :],
+                data[img_id, j_id, :],
+                data[img_id, j_id + 1, :])
+
+    data_angle[np.logical_or(np.isnan(data_angle), np.isinf(data_angle))] = 0
+    return data_angle
+
+# <codecell>
+
+data_angle = np.vstack(seq(settings.data.EXPERIMENTS).map(lambda x: positional_data(x, dimensions='3d')))
+
+data_angle = convert_3d_to_angle(data_angle)
+data_angle_cols_of_interest = [2,7,12, 19+2, 19+4, 19+12]
+data_angle_raw = data_angle.copy()
+data_angle = data_angle[:, data_angle_cols_of_interest][frames_of_interest]
+
+# <codecell>
+
+plots.plot_angle_columns(data_angle_raw, np.arange(data_angle_raw.shape[1]));
+
+# <codecell>
+
+plots.plot_angle_columns(data_angle_raw, data_angle_cols_of_interest);
+
+# <markdowncell>
+
+# ### selection based on variance
+
+# <codecell>
+
+threshold = 0
+selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
+f = plots.plot_angle_columns(data_angle_raw, selected_cols)
+f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
+
+# <codecell>
+
+warnings.warn('reselecting the columns based on variance')
+data_angle = data_angle_raw[:, selected_cols]
+
+# <codecell>
+
+if config.NB_DIMS == 3:
+    joint_positions, normalisation_factors = preprocessing.normalize(data_angle[frames_of_interest])
+    data_angle_cols_of_interest = selected_cols
+
+# <markdowncell>
+
 # # SOM-VAE model
 
 # <codecell>
@@ -378,16 +452,24 @@ def model_main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rat
 
 ## config
 
-_name_ = "time_series_experiments"
-_latent_dim_ = 16 
+_name_ = "2d_data_only-recon-loss_no-time-series"
+if config.NB_DIMS == 2:
+    _latent_dim_ = 16
+    _input_channels_ = joint_positions.shape[1] * config.NB_DIMS,
+else:
+    _latent_dim_ = int(np.sqrt(data_angle.shape[1]))
+    _input_channels_ = joint_positions.shape[1]
+
 _som_dim = [8,8]
 
 # TODO add hash of config to modelpath
 
+
+
 som_vae_config = {
     "num_epochs": 400,
     "patience": 100,
-    "batch_size": 10, # len(joint_positions), # if time_series then each batch should be a time series
+    "batch_size": 30, # len(joint_positions), # if time_series then each batch should be a time series
     "latent_dim": _latent_dim_,
     "som_dim": _som_dim,
     "learning_rate": 0.0005,
@@ -406,11 +488,12 @@ som_vae_config = {
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": True,
+    "time_series": False,
     "image_like_input": False,
     "activation_fn": "relu", # or relu -> with normalisation layer?
-    "input_channels": joint_positions.shape[1] * config.NB_DIMS,
-    "input_length": 1
+    "input_channels": _input_channels_,
+    "input_length": 1,
+    "time_sequence_length": 10
 }
 
 # todo add git commit hash to config name
@@ -434,21 +517,32 @@ _MODEL_CONFIG_PATH_.mkdir(exist_ok=True)
 with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
     json.dump(som_vae_config, f)
 
+# <codecell>
+
+assert not(som_vae_config['time_series'] and config.NB_DIMS == 2), 'this does not work right now'
+
 # <markdowncell>
 
 # ## data processing
 
 # <codecell>
 
-def to_time_series(data, sequence_length=som_vae_config['batch_size']):
+def to_time_series(data, sequence_length=som_vae_config['time_sequence_length']):
     for i in range(len(data)):
         if i + sequence_length <= len(data):
             yield data[i:i+sequence_length]
 
 # <codecell>
 
+joint_positions.shape
+
+# <codecell>
+
 # flatten the data
-reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1)
+if config.NB_DIMS == 2:
+    reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1)
+else:
+    reshaped_joint_position = joint_positions
 print(f"shape of input data:{reshaped_joint_position.shape}")
 
 # TODO move scaler back down
@@ -456,18 +550,21 @@ warnings.warn('scaling at this point is not good science, this is just a quick f
 scaler = MinMaxScaler()
 reshaped_joint_position = scaler.fit_transform(reshaped_joint_position)
 
-assert np.product(reshaped_joint_position.shape[1:]) > som_vae_config['latent_dim'],\
-       'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
 
 if som_vae_config['time_series']:
     # duplicating the elements, e.g.: [0, 1, 2], [1, 2, 3], [2, 3, 4], ...
     # this has a sequence length of 3
     _time_series_idx_ = list(to_time_series(range(len(joint_positions))))
     _jp = np.concatenate([reshaped_joint_position[idx].reshape(1, -1, reshaped_joint_position.shape[1]) for idx in _time_series_idx_], axis=0)\
-            .reshape(-1, som_vae_config['batch_size'] * reshaped_joint_position.shape[1])
-    som_vae_config['input_channels'] = som_vae_config['batch_size'] * reshaped_joint_position.shape[1]
+            .reshape(-1, som_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1])
+    som_vae_config['input_channels'] = som_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1]
 else:
+    som_vae_config['input_length'] = 1
+    som_vae_config['input_channels'] = reshaped_joint_position.shape[1]
     _jp = reshaped_joint_position 
+    
+assert np.product(_jp.shape[1:]) > som_vae_config['latent_dim'],\
+       'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
     
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
 # train - test split
@@ -515,14 +612,20 @@ res, mdl, losses, res_val = model_main(**{**{k:som_vae_config[k] for k in _args 
 
 def _reverse_to_original_shape_(pos_data, input_shape=None):
     if input_shape is None:
-        input_shape = (-1, config.NB_DIMS)
+        if config.NB_DIMS == 2:
+            input_shape = (-1, config.NB_DIMS)
+        else:
+            input_shape = (-1,)
         
     return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
 
 def _time_series_reverser_(xs, is_time_series=som_vae_config['time_series'], original_size=None):
     if is_time_series:
-        return xs.reshape(-1, som_vae_config['batch_size'], 30)[:, -1]
+        if config.NB_DIMS == 3:
+            return xs.reshape(-1, som_vae_config['time_sequence_length'], joint_positions.shape[1])[:, -1]
+        else:
+            return xs.reshape
     else:
         return xs
 
@@ -533,29 +636,35 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(_time_series_r
 
 # <codecell>
 
-f =plots.plot_losses(losses)
+f =plots.plot_losses(losses, title=f'using {config.NB_DIMS} and {joint_positions.shape[1]} features')
+p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_losses.png"
+pathlib.Path(p).parent.mkdir(exist_ok=True)
+f.savefig(p)
 plots.plot_latent_frame_distribution(res[2], nb_bins=_latent_dim_)
 plots.plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
-_time_series_idx_ = list(to_time_series(range(len(joint_positions))))
-timed_jp = np.concatenate([joint_positions[idx,:,:2].reshape(1, -1, reshaped_joint_position.shape[1]) for idx in _time_series_idx_], axis=0)[:, -1].reshape(-1, 15, 2)
+if config.NB_DIMS == 3:
+    f = plots.plot_reconstructed_angle_data(real_data=joint_positions, reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), columns=data_angle_cols_of_interest)
+    p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
+    pathlib.Path(p).parent.mkdir(exist_ok=True)
+    f.savefig(p)
 
 # <codecell>
 
-plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
-                                                 np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+if som_vae_config['time_series']:
+    _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
+    timed_jp = joint_positions[_time_series_idx_]
 
-# <codecell>
+    plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
+                                                     np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+else:
+    plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                     np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
 
-plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                 np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
-
-# <codecell>
-
-plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                 np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
+    plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                     np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
@@ -628,41 +737,40 @@ reload(video)
 
 # <codecell>
 
-# full video
-_p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
-                                         images_paths_for_experiments=images_paths_for_experiments,
-                                         cluster_assignments=cluster_assignments,
-                                         cluster_colors=cluster_colors,
-                                         n_train=nb_of_data_points)
-
-print(_p)
-display_video(_p)
-
-# <codecell>
-
-# Creating videos for each cluster
 from som_vae.helpers import misc
-reload(video)
 from collections import OrderedDict
 
-__N_CLUSTER_TO_VIZ__ = 10
+_N_CLUSTER_TO_VIZ_ = 10
+_VIZ_SINGLE_CLUSTERS_ = False
 
-_positional_data = [reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]]
+# full video
+if False:
+    _p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]],
+                                             images_paths_for_experiments=images_paths_for_experiments,
+                                             cluster_assignments=cluster_assignments,
+                                             cluster_colors=cluster_colors,
+                                             n_train=nb_of_data_points)
 
-_t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
-_t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+    print("full path for recon video only: ", _p)
+    display_video(_p)
 
-cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data,
-                                                                      cluster_assignments=cluster_assignments,
-                                                                      images_paths_for_experiments=images_paths_for_experiments,
-                                                                      n_train=res[2].shape[0],
-                                                                      cluster_colors=cluster_colors,
-                                                                      cluster_id_to_visualize=p[1]))
-                    for p in _t[:__N_CLUSTER_TO_VIZ__])
+if _VIZ_SINGLE_CLUSTERS_:
+    # Creating videos for each cluster
 
-# <codecell>
+    _positional_data = [reverse_pos_pipeline(p) for p in [joint_positions, joint_pos_encoding, joint_pos_embedding]]
 
-cluster_vids.keys()
+    _t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
+    _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+
+    cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data,
+                                                                          cluster_assignments=cluster_assignments,
+                                                                          images_paths_for_experiments=images_paths_for_experiments,
+                                                                          n_train=res[2].shape[0],
+                                                                          cluster_colors=cluster_colors,
+                                                                          cluster_id_to_visualize=p[1]))
+                        for p in _t[:_N_CLUSTER_TO_VIZ_])
+
+    print('cluster_vids: ', cluster_vids.keys())
 
 # <codecell>
 
@@ -672,14 +780,16 @@ cluster_vids.keys()
 
 # <codecell>
 
-# order by total size
-idx = 0
-display_video(list(cluster_vids.values())[idx])
+if _VIZ_SINGLE_CLUSTERS_:
+    # order by total size
+    idx = 0
+    display_video(list(cluster_vids.values())[idx])
 
 # <codecell>
 
-idx += 1
-display_video(list(cluster_vids.values())[idx])
+if _VIZ_SINGLE_CLUSTERS_:
+    idx += 1
+    display_video(list(cluster_vids.values())[idx])
 
 # <markdowncell>
 
@@ -728,12 +838,15 @@ for l, c in behaviour_colours.items():
     plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
     
 plt.legend()
-plt.title('simple t-SNE on latent space');
+plt.title('simple t-SNE on latent space')
+fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
 
 # <codecell>
 
 reload(video)
+warnings.warn('this takes some time to run...')
 if som_vae_config['time_series']:
+    warnings.warn('this code does probably not work with time_series')
     original_jp = timed_jp
 else:
     original_jp = joint_positions
@@ -746,7 +859,7 @@ _p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in
                                                as_frames=True)
 
 
-_embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels[frames_of_interest].iloc[_time_series_last_frame_idx_]) for i in range(len(X_embedded)))
+_embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels) for i in range(len(X_embedded)))
 frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_img in zip(_p, _embedding_imgs))
 
 embedding_with_recon_path = f"../neural_clustering_data/videos/{som_vae_config['ex_name']}_embedding_with_recon.mp4"
