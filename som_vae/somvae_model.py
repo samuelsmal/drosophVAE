@@ -111,7 +111,7 @@ class SOMVAE:
     def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
             input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1.,
                  image_like_input=True,
-                 loss_weight_embedding=1., loss_weight_encoding=1., config=None):
+                 loss_reconstruction_embedding=1., loss_reconstruction_encoding=1., config=None):
         """Initialization method for the SOM-VAE model object.
 
         Args:
@@ -143,8 +143,8 @@ class SOMVAE:
         self.gamma = gamma
         self.tau = tau
         self.image_like_input = image_like_input
-        self.loss_weight_embedding = loss_weight_embedding
-        self.loss_weight_encoding = loss_weight_encoding
+        self.loss_reconstruction_embedding = loss_reconstruction_embedding
+        self.loss_reconstruction_encoding = loss_reconstruction_encoding
 
         self.config = config
 
@@ -177,8 +177,9 @@ class SOMVAE:
 
         For reach som_dim one embedding of dim `latent_dim`
         """
-        embeddings = tf.get_variable("embeddings", self.som_dim+[self.latent_dim],
-                             initializer=tf.truncated_normal_initializer(stddev=0.05))
+        embeddings = tf.get_variable("embeddings",
+                                     self.som_dim + [self.latent_dim],
+                                     initializer=tf.truncated_normal_initializer(stddev=0.05))
 
         tf.summary.tensor_summary("embeddings", embeddings)
         return embeddings
@@ -219,9 +220,8 @@ class SOMVAE:
     @lazy_scope
     def z_dist_flat(self):
         """Computes the distances between the encodings and the embeddings."""
-        print(self.embeddings.shape)
-        print('shape expanded ze', tf.expand_dims(tf.expand_dims(self.z_e, 1), 1).shape)
-        print('shape expanded em', tf.expand_dims(self.embeddings, 0))
+        print(f"embeddings shape in z_dist_flat: {self.embeddings.shape}, and expanded {tf.expand_dims(self.embeddings, 0)}")
+        print(f"ze shape: {self.z_e.shape} and expanded {tf.expand_dims(tf.expand_dims(self.z_e, 1), 1).shape}")
 
         z_dist = tf.squared_difference(tf.expand_dims(tf.expand_dims(self.z_e, 1), 1), tf.expand_dims(self.embeddings, 0))
         z_dist_red = tf.reduce_sum(z_dist, axis=-1)
@@ -267,14 +267,18 @@ class SOMVAE:
         k2_right = tf.where(k2_not_right, tf.add(k_2, 1), k_2)
         k2_left = tf.where(k2_not_left, tf.subtract(k_2, 1), k_2)
 
-        z_q_up = tf.where(k1_not_top, tf.gather_nd(self.embeddings, tf.stack([k1_up, k_2], axis=1)),
+        z_q_up = tf.where(k1_not_top,
+                          tf.gather_nd(self.embeddings, tf.stack([k1_up, k_2], axis=1)),
                           tf.zeros([self.batch_size, self.latent_dim]))
-        z_q_down = tf.where(k1_not_bottom, tf.gather_nd(self.embeddings, tf.stack([k1_down, k_2], axis=1)),
-                          tf.zeros([self.batch_size, self.latent_dim]))
-        z_q_right = tf.where(k2_not_right, tf.gather_nd(self.embeddings, tf.stack([k_1, k2_right], axis=1)),
-                          tf.zeros([self.batch_size, self.latent_dim]))
-        z_q_left = tf.where(k2_not_left, tf.gather_nd(self.embeddings, tf.stack([k_1, k2_left], axis=1)),
-                          tf.zeros([self.batch_size, self.latent_dim]))
+        z_q_down = tf.where(k1_not_bottom,
+                            tf.gather_nd(self.embeddings, tf.stack([k1_down, k_2], axis=1)),
+                            tf.zeros([self.batch_size, self.latent_dim]))
+        z_q_right = tf.where(k2_not_right,
+                             tf.gather_nd(self.embeddings, tf.stack([k_1, k2_right], axis=1)),
+                             tf.zeros([self.batch_size, self.latent_dim]))
+        z_q_left = tf.where(k2_not_left,
+                            tf.gather_nd(self.embeddings, tf.stack([k_1, k2_left], axis=1)),
+                            tf.zeros([self.batch_size, self.latent_dim]))
 
         z_q_neighbors = tf.stack([self.z_q, z_q_up, z_q_down, z_q_right, z_q_left], axis=1)
         return z_q_neighbors
@@ -295,23 +299,16 @@ class SOMVAE:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("encoder"):
                 h_encod_0      = tf.keras.layers.Dense(256, activation=_act_fn)(self.inputs)
-                h_norm_encod_0 = tf.keras.layers.BatchNormalization()(h_encod_0)
-                h_encod_1      = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_encod_0)
-                h_norm_encod_1 = tf.keras.layers.BatchNormalization()(h_encod_1)
-                h_encod_2      = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_encod_1)
-                h_norm_encod_2 = tf.keras.layers.BatchNormalization()(h_encod_2)
-                #h_encod_3      = tf.keras.layers.Dense(32,  activation=_act_fn)(h_norm_encod_2)
-                #h_norm_encod_3 = tf.keras.layers.BatchNormalization()(h_encod_3)
+                h_encod_1      = tf.keras.layers.Dense(128, activation=_act_fn)(h_encod_0)
+                h_encod_2      = tf.keras.layers.Dense(64,  activation=_act_fn)(h_encod_1)
+                h_encod_3      = tf.keras.layers.Dense(32,  activation=_act_fn)(h_encod_2)
                 #h_encod_4      = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_3)
                 #h_norm_encod_4 = tf.keras.layers.BatchNormalization()(h_encod_4)
                 #h_encod_5      = tf.keras.layers.Dense(8,   activation=_act_fn)(h_norm_encod_4)
                 #h_norm_encod_5 = tf.keras.layers.BatchNormalization()(h_encod_5)
                 #h_encod_6      = tf.keras.layers.Dense(4,   activation=_act_fn)(h_norm_encod_5)
                 #h_norm_encod_6 = tf.keras.layers.BatchNormalization()(h_encod_6)
-                h_encod_7      = tf.keras.layers.Dense(self.latent_dim,
-                                                       activation=_act_fn)(h_norm_encod_2)
-                _z_e           = tf.keras.layers.BatchNormalization()(h_encod_7)
-        print(_z_e.shape)
+                _z_e = tf.keras.layers.Dense(self.latent_dim,activation=_act_fn)(h_encod_3)
         return _z_e
 
 
@@ -338,14 +335,10 @@ class SOMVAE:
                 #h_x_embed_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_embed_1)
                 #h_norm_embed_2 = tf.keras.layers.BatchNormalization()(h_x_embed_1)
                 h_x_embed_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_q)
-                h_norm_embed_3 = tf.keras.layers.BatchNormalization()(h_x_embed_3)
-                h_x_embed_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_embed_3)
-                h_norm_embed_4 = tf.keras.layers.BatchNormalization()(h_x_embed_4)
-                h_x_embed_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_embed_4)
-                h_norm_embed_5 = tf.keras.layers.BatchNormalization()(h_x_embed_5)
-                h_x_embed_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_norm_embed_5)
-                h_norm_embed_6 = tf.keras.layers.BatchNormalization()(h_x_embed_6)
-                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_norm_embed_6)
+                h_x_embed_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_embed_3)
+                h_x_embed_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_embed_4)
+                h_x_embed_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_x_embed_5)
+                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_embed_6)
 
         return x_hat
 
@@ -373,23 +366,23 @@ class SOMVAE:
                 #h_x_encod_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_1)
                 #h_norm_encod_2 = tf.keras.layers.BatchNormalization()(h_x_encod_2)
                 h_x_encod_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_e)
-                h_norm_encod_3 = tf.keras.layers.BatchNormalization()(h_x_encod_3)
-                h_x_encod_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_norm_encod_3)
-                h_norm_encod_4 = tf.keras.layers.BatchNormalization()(h_x_encod_4)
-                h_x_encod_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_norm_encod_4)
-                h_norm_encod_5 = tf.keras.layers.BatchNormalization()(h_x_encod_5)
-                h_x_encod_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_norm_encod_5)
-                h_norm_encod_6 = tf.keras.layers.BatchNormalization()(h_x_encod_6)
-                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_norm_encod_6)
+                h_x_encod_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_encod_3)
+                h_x_encod_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_encod_4)
+                h_x_encod_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_x_encod_5)
+                x_hat          = tf.keras.layers.Dense(self.input_channels,
+                                                       activation="sigmoid")(h_x_encod_6)
         return x_hat
 
 
     @lazy_scope
     def loss_reconstruction(self):
         """Computes the combined reconstruction loss for both reconstructions."""
+        print(f"shape of input: {self.inputs.shape}")
+        print(f"shape of x_hat_embedding: {self.x_hat_embedding.shape}")
+        print(f"shape of x_hat_encoding: {self.x_hat_encoding.shape}")
         loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.x_hat_embedding)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.x_hat_encoding)
-        loss_rec_mse = self.loss_weight_embedding * loss_rec_mse_zq + self.loss_weight_encoding * loss_rec_mse_ze
+        loss_rec_mse = self.loss_reconstruction_embedding * loss_rec_mse_zq + self.loss_reconstruction_encoding * loss_rec_mse_ze
         tf.summary.scalar("loss_reconstruction", loss_rec_mse)
         return loss_rec_mse
 

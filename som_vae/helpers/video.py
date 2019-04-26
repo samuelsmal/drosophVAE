@@ -186,7 +186,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
 
     _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
 
-    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment):
+    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment, experiment_path=None):
         # frame_nb is the number of the frame shown, continuous
         # frame_id is the id of the order of the frame,
         # e.g. frame_nb: [0, 1, 2, 3], frame_id: [123, 222, 333, 401]
@@ -204,6 +204,8 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
         else:
             cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
 
+
+
         # train / test text
         f = cv2.putText(**text_default_args,
                         img=f,
@@ -217,6 +219,12 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
                         org=(0, 20),
                         color=(255, 255, 255))
 
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=pathlib.Path(experiment_path).stem,
+                        org=(0, 40),
+                        color=(255, 255, 255))
+
         # cluster assignment bar
         for line_idx, l in enumerate(lines_pos):
             if line_idx == frame_nb:
@@ -227,7 +235,8 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
 
         return f
 
-    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment, experiment[0])
+    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
+                       experiment[0], experiment_path=experiment[1])
               for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
                                                                   cluster_assignments[cluster_assignment_idx],
                                                                   np.array(images_paths_for_experiments)[cluster_assignment_idx])))
