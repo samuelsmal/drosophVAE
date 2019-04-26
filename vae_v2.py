@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 # <nbformat>4</nbformat>
 
+# <markdowncell>
+
+# using: https://www.kaggle.com/hone5com/fraud-detection-with-variational-autoencoder
+
 # <codecell>
 
 # Import TensorFlow >= 1.9 and enable eager execution
@@ -52,15 +56,11 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.manifold import TSNE
 import os
 
-%matplotlib inline
+#%matplotlib inline
 
 # <codecell>
 
 jupyter.fix_layout()
-
-# <codecell>
-
-from som_vae.helpers.misc import get_hostname
 
 # <codecell>
 
@@ -119,12 +119,6 @@ data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
 
 # <codecell>
 
-from tensorflow import distributions as tfd
-from tensorflow import keras as tfk
-from tensorflow.keras import layers as tfkl
-
-# <codecell>
-
 from tensorflow.contrib.distributions import MultivariateNormalDiag
 
 # <codecell>
@@ -153,7 +147,7 @@ encoder = tfk.Sequential([
 ], name='encoder')
 
 encoder.summary()
-plot_model(encoder, to_file='vae_mlp_encoder.png', show_shapes=True)
+#plot_model(encoder, to_file='vae_mlp_encoder.png', show_shapes=True)
 
 decoder = tfk.Sequential([
     tfkl.InputLayer(input_shape=[latent_dim]),
@@ -163,7 +157,7 @@ decoder = tfk.Sequential([
 ], name='decoder')
 
 decoder.summary()
-plot_model(decoder, to_file='vae_mlp_decoder.png', show_shapes=True)
+#plot_model(decoder, to_file='vae_mlp_decoder.png', show_shapes=True)
 
 vae = tfk.Model(inputs=encoder.inputs,
                 outputs=decoder(encoder.outputs[0]),
@@ -178,7 +172,3 @@ vae.summary()
 plot_model(vae,
            to_file='vae_mlp.png',
            show_shapes=True)
-
-# <codecell>
-
-

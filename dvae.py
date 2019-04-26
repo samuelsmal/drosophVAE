@@ -144,9 +144,9 @@ data_train.shape
 
 # <codecell>
 
-class CVAE(tf.keras.Model):
+class DVAE(tf.keras.Model):
     def __init__(self, latent_dim, input_shape, batch_size):
-        super(CVAE, self).__init__()
+        super(DVAE, self).__init__()
         self.latent_dim = latent_dim
         self._input_shape = input_shape
         self._batch_size = batch_size
@@ -190,7 +190,7 @@ class CVAE(tf.keras.Model):
     def predict(self, x):
         mean, logvar = self.encode(x)
         z = model.reparameterize(mean, logvar)
-        return model.decode(z)
+        return model.decode(z, apply_sigmoid=True)
 
 # <markdowncell>
 
@@ -247,7 +247,7 @@ num_examples_to_generate = 16
 # it will be easier to see the improvement.
 random_vector_for_generation = tf.random_normal(
     shape=[num_examples_to_generate, latent_dim])
-model = CVAE(latent_dim, input_shape=data_train.shape[1:], batch_size=BATCH_SIZE)
+model = DVAE(latent_dim, input_shape=data_train.shape[1:], batch_size=BATCH_SIZE)
 
 # <codecell>
 
