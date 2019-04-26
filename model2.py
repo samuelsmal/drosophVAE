@@ -7,6 +7,7 @@
 
 # <codecell>
 
+import warnings
 from importlib import reload
 from collections import namedtuple
 import inspect
@@ -376,10 +377,10 @@ som_vae_config = {
     #"beta": 0.0, #0.9,
     #"gamma": 0.0, #1.8,
     #"tau": 0.0, # 1.4,
-    "alpha": 0.0,          # commit loss
-    "beta": 0.0,           # loss som
-    "gamma": 0.0,          # loss proba
-    "tau": 0.0,            # loss z proba
+    "alpha": 1.0,          # commit loss
+    "beta": 0.9,           # loss som
+    "gamma": 0.8,          # loss proba
+    "tau": 1.4,            # loss z proba
     "loss_weight_encoding": 1.0,
     "loss_weight_embedding": 0.0,
     "decay_factor": 0.9,
@@ -387,7 +388,7 @@ som_vae_config = {
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": False,
+    "time_series": True,
     "image_like_input": False,
     "activation_fn": "relu", # or relu -> with normalisation layer?
     "input_channels": joint_positions.shape[1] * config.NB_DIMS,
@@ -425,6 +426,10 @@ def to_time_series(data, sequence_length=som_vae_config['batch_size']):
     for i in range(len(data)):
         if i + sequence_length <= len(data):
             yield data[i:i+sequence_length]
+
+# <codecell>
+
+_jp.shape
 
 # <codecell>
 
@@ -467,10 +472,6 @@ data = {
   "y_val": labels[nb_of_data_points:]
 }
 
-
-# <codecell>
-
-resha
 
 # <markdowncell>
 
