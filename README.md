@@ -8,6 +8,25 @@ find <base path to experiment>/180920_aDN_CsCh -name "*.jpg" -o -name "*.pkl" | 
 rsync -azvh ramdya_lab:/target/path/maybe/without/some/of/the/parents /local/path
 ```
 
+## Installation of tf-nightly gpu
+
+**Basic installation**: (that you might want to adapt, )
+
+```
+pip install --upgrade tf-nightly==1.14.1-dev20190312 tf-nightly-gpu==1.14.1-dev20190312 tfp-nightly==0.7.0.dev20190312
+
+# This should also do the trick
+# pip install --upgrade tf-nightly tf-nightly-gpu tfp-nightly
+```
+
+If error `libcublas.so.10.0: cannot open shared object file: No such file or directory` occurs:
+
+```
+conda install cudatoolkit
+conda install cudnn
+```
+
+
 # OLD STUFF BELOW FROM FORKED REPO
 # SOM-VAE model
 
