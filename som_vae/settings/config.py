@@ -4,7 +4,7 @@ import pathlib
 from som_vae.helpers.misc import get_hostname
 from som_vae.settings import data
 
-NB_DIMS = 2
+NB_DIMS = 3
 
 LEGS = [0, 1, 2, 5, 6, 7]
 LEGS = [0, 1, 2] #, 5, 6, 7] # since we do not care about the other side
