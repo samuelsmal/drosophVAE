@@ -116,21 +116,21 @@ def plot_cluster_assignment_over_time(cluster_assignments):
     plt.xlabel("frame")
 
 
-def plot_reconstructed_angle_data(real_data, reconstructed_data, columns):
+def plot_reconstructed_angle_data(real_data, reconstructed_data, columns, fix_ylim=False):
     _colors = sns.color_palette(n_colors=2)
 
-    fig, axs = plt.subplots(nrows=2, ncols=real_data.shape[1], figsize=(30, 5))
+    fig, axs = plt.subplots(nrows=real_data.shape[1], ncols=1, figsize=(5, 30))
     for a in range(real_data.shape[1]):
-        axs[0][a].set_title(f"angle nb: {columns[a]}")
-        axs[0][a].plot(real_data[:,a], c=_colors[0])
-        axs[1][a].plot(reconstructed_data.reshape(-1, np.product(reconstructed_data.shape[1:]))[:,a], c=_colors[1])
+        axs[a].plot(real_data[:,a], c=_colors[0], label='real')
+        axs[a].plot(reconstructed_data[:,a], c=_colors[1], label='reconstructed')
+        if fix_ylim:
+            axs[a].set_ylim(-np.pi, np.pi)
 
-    axs[0][0].set_ylabel('real')
-    axs[1][0].set_ylabel('reconstructed')
-
-
+    axs[0].legend()
     fig.suptitle('real vs reconstructed angle data')
-    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.97)
+
     return fig
 
 
@@ -139,5 +139,5 @@ def plot_angle_columns(data, columns):
     for i, c in enumerate(columns):
         axs[i].set_title(f"angle nb: {c}")
         axs[i].plot(data[:,c])
-        
+
     return fig
