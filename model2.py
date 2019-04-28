@@ -93,7 +93,7 @@ frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
 
 # <codecell>
 
-if False:
+if True:
     plots.ploting_frames(joint_positions)
     plots.ploting_frames(joint_positions - normalisation_factors)
 
@@ -636,7 +636,7 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(_time_series_r
 
 # <codecell>
 
-f =plots.plot_losses(losses, title=f'using {config.NB_DIMS} and {joint_positions.shape[1]} features')
+f =plots.plot_losses(losses, title=f'using {config.NB_DIMS}d data and {joint_positions.shape[1]} features')
 p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_losses.png"
 pathlib.Path(p).parent.mkdir(exist_ok=True)
 f.savefig(p)
@@ -650,21 +650,19 @@ if config.NB_DIMS == 3:
     p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
     pathlib.Path(p).parent.mkdir(exist_ok=True)
     f.savefig(p)
-
-# <codecell>
-
-if som_vae_config['time_series']:
-    _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
-    timed_jp = joint_positions[_time_series_idx_]
-
-    plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
-                                                     np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
 else:
-    plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                     np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+    if som_vae_config['time_series']:
+        _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
+        timed_jp = joint_positions[_time_series_idx_]
 
-    plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                     np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
+        plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
+                                                         np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+    else:
+        plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                         np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+
+        plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
+                                                         np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
