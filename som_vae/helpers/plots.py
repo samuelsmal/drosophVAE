@@ -127,18 +127,27 @@ def plot_reconstructed_angle_data(real_data, reconstructed_data, columns, fix_yl
         if fix_ylim:
             axs[a].set_ylim(-np.pi, np.pi)
 
-    axs[0].legend()
+    axs[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fancybox=True)
     fig.suptitle('real vs reconstructed angle data')
+
     plt.tight_layout()
-    plt.subplots_adjust(top=0.97)
+    plt.subplots_adjust(top=0.96)
+
 
     return fig
 
 
 def plot_angle_columns(data, columns):
-    fig, axs = plt.subplots(nrows=1, ncols=len(columns), figsize=(30, 5))
+    fig, axs = plt.subplots(ncols=1, nrows=len(columns), figsize=(5, 3 * len(columns)))
     for i, c in enumerate(columns):
-        axs[i].set_title(f"angle: {c}")
+        axs[i].set_title(c)
         axs[i].plot(data[:, i])
+        axs[i].set_xlabel('time')
+        axs[i].set_ylabel('[radians]')
+
+    fig.suptitle('Angle data')
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.97) # necessary for the title not to be in the first plot
 
     return fig

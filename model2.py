@@ -52,6 +52,7 @@ from som_vae.utils import *
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
 from som_vae.settings import config, skeleton
+from som_vae.settings.config import positional_data
 from som_vae.helpers import video, plots
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
@@ -116,21 +117,24 @@ def angle_three_points(a, b, c):
 
 # <codecell>
 
-from som_vae.settings.config import positional_data
-
 def convert_3d_to_angle(data):
     data_angle = np.zeros((data.shape[0], data.shape[1]), dtype=np.float32)
     for img_id in range(data.shape[0]):
         for j_id in range(1, data.shape[1]-1):
-            if skeleton.is_tarsus_tip(j_id) or skeleton.is_stripe(j_id) or skeleton.is_antenna(j_id):
+            if any([fn(j_id) for fn in [skeleton.is_body_coxa, skeleton.is_tarsus_tip, skeleton.is_stripe, skeleton.is_antenna]]):
                 continue
             data_angle[img_id, j_id] = angle_three_points(
                 data[img_id, j_id - 1, :],
                 data[img_id, j_id, :],
                 data[img_id, j_id + 1, :])
 
-    data_angle[np.logical_or(np.isnan(data_angle), np.isinf(data_angle))] = 0
+    data_angle[np.isnan(data_angle) | np.isinf(data_angle)] = 0
     return data_angle
+
+# <codecell>
+
+def get_3d_columns_names(selected_columns):
+    return np.array([f"limb: {skeleton.limb_id[i]}: {p.name}" for i, p in enumerate(skeleton.tracked_points)])[selected_columns]
 
 # <codecell>
 
@@ -141,13 +145,12 @@ data_angle_cols_of_interest = [2,7,12, 19+2, 19+4, 19+12]
 data_angle_raw = data_angle.copy()
 data_angle = data_angle[:, data_angle_cols_of_interest][frames_of_interest]
 
-# <codecell>
-
-plots.plot_angle_columns(data_angle_raw, np.arange(data_angle_raw.shape[1]));
+angled_data_columns = get_3d_columns_names(data_angle_cols_of_interest)
 
 # <codecell>
 
-plots.plot_angle_columns(data_angle_raw, data_angle_cols_of_interest);
+reload(plots)
+plots.plot_angle_columns(data_angle, angled_data_columns);
 
 # <markdowncell>
 
@@ -155,10 +158,13 @@ plots.plot_angle_columns(data_angle_raw, data_angle_cols_of_interest);
 
 # <codecell>
 
+reload(plots)
 threshold = 0
 selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
-f = plots.plot_angle_columns(data_angle_raw, selected_cols)
+angled_data_columns = get_3d_columns_names(selected_cols)
+f = plots.plot_angle_columns(data_angle_raw[:, selected_cols], angled_data_columns)
 f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
+plt.subplots_adjust(top=0.97)
 
 # <codecell>
 
@@ -452,7 +458,6 @@ def model_main(X_train, X_val, y_train, y_val, latent_dim, som_dim, learning_rat
 
 ## config
 
-_name_ = "2d_data_only-recon-loss_no-time-series"
 if config.NB_DIMS == 2:
     _latent_dim_ = 16
     _input_channels_ = joint_positions.shape[1] * config.NB_DIMS,
@@ -461,10 +466,6 @@ else:
     _input_channels_ = joint_positions.shape[1]
 
 _som_dim = [8,8]
-
-# TODO add hash of config to modelpath
-
-
 
 som_vae_config = {
     "num_epochs": 400,
@@ -484,11 +485,10 @@ som_vae_config = {
     "loss_reconstruction_encoding": 1.0,
     "loss_reconstruction_embedding": 0.0,
     "decay_factor": 0.9,
-    "name": _name_,
     "interactive": True, # this is just for the progress bar
     "data_set": "MNIST_data",
     "save_model": False,
-    "time_series": False,
+    "time_series": True,
     "image_like_input": False,
     "activation_fn": "relu", # or relu -> with normalisation layer?
     "input_channels": _input_channels_,
@@ -499,9 +499,20 @@ som_vae_config = {
 # todo add git commit hash to config name
 # todo change _name_ to something meaningful
 
+if all(som_vae_config[l] == 0.0 for l in ['alpha', 'beta', 'gamma', 'tau']):
+    _loss_description_ = 'only-recon-loss'
+else:
+    _loss_description_ = 'all-losses'
+    
+if som_vae_config['time_series']:
+    _time_series_description_ = 'as-time-series'
+else:
+    _time_series_description_ = 'no-time-series'
+    
+_name_ = f"{config.NB_DIMS}d-{_loss_description_}_{_time_series_description_}"
+som_vae_config['name'] = _name_
 _ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(som_vae_config, sort_keys=True).encode()).hexdigest()[:5])
 som_vae_config['ex_name'] = _ex_name_
-
  
 som_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
 som_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
@@ -645,8 +656,21 @@ plots.plot_cluster_assignment_over_time(res[2])
 
 # <codecell>
 
+
+
+# <codecell>
+
+reload(plots)
 if config.NB_DIMS == 3:
-    f = plots.plot_reconstructed_angle_data(real_data=joint_positions, reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), columns=data_angle_cols_of_interest)
+    if som_vae_config['time_series']:
+        _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
+        timed_jp = joint_positions[_time_series_idx_]
+    else:
+        timed_jp = joint_positions
+        
+    f = plots.plot_reconstructed_angle_data(real_data=timed_jp,
+                                            reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
+                                            columns=angled_data_columns)
     p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
     pathlib.Path(p).parent.mkdir(exist_ok=True)
     f.savefig(p)
@@ -656,13 +680,16 @@ else:
         timed_jp = joint_positions[_time_series_idx_]
 
         plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
-                                                         np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+                                                               np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
+                                                               validation_cut_off=nb_of_data_points)
     else:
         plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                         np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+                                                               np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
+                                                               validation_cut_off=nb_of_data_points)
 
         plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                         np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), validation_cut_off=nb_of_data_points)
+                                                               np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), 
+                                                               validation_cut_off=nb_of_data_points)
 
 # <codecell>
 
@@ -672,21 +699,28 @@ def mean_squared_difference(a, b):
     return ((a - b) ** 2).mean()
 
 
-_n_train_ = len(res[3])
-_idx_ = (s_[:_n_train_,:,:config.NB_DIMS], s_[_n_train_:,:,:config.NB_DIMS]) * 2
-_order_split_ = ['train', 'test'] * 2
-_order_ = ['encoding'] * 2 + ['embedding'] * 2
-_loop_data_ = (reconstructed_from_encoding_train, reconstructed_from_encoding_val, reconstructed_from_embedding_train, reconstructed_from_embedding_val)
+if not som_vae_config['time_series']:
+    # the problem is the train-test split point... not super hard to figure out...
+    _n_train_ = len(res[3])
+    _idx_ = (s_[:_n_train_,:,:config.NB_DIMS], s_[_n_train_:,:,:config.NB_DIMS]) * 2
+    _order_split_ = ['train', 'test'] * 2
+    _order_ = ['encoding'] * 2 + ['embedding'] * 2
+    _loop_data_ = (reconstructed_from_encoding_train, reconstructed_from_encoding_val, reconstructed_from_embedding_train, reconstructed_from_embedding_val)
 
-for i, o, order_split, d in zip(_idx_, _order_, _order_split_, _loop_data_):
-    if som_vae_config['time_series']:
-        print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(timed_jp[i], d)}")
-    else:
-        print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(joint_positions[i], d)}")
+    for i, o, order_split, d in zip(_idx_, _order_, _order_split_, _loop_data_):
+        if som_vae_config['time_series']:
+            print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(timed_jp[i], d)}")
+        else:
+            print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(joint_positions[i], d)}")
 
 # <markdowncell>
 
 # ## cool videos 
+
+# <codecell>
+
+if som_vae_config['time_series']:
+    raise ValueError('videos and such are not yet done for 3d data')
 
 # <codecell>
 
@@ -841,6 +875,11 @@ fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne
 
 # <codecell>
 
+from IPython.display import Image
+Image(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+
+# <codecell>
+
 reload(video)
 warnings.warn('this takes some time to run...')
 if som_vae_config['time_series']:
@@ -863,6 +902,10 @@ frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_
 embedding_with_recon_path = f"../neural_clustering_data/videos/{som_vae_config['ex_name']}_embedding_with_recon.mp4"
 video._save_frames_(embedding_with_recon_path, frames)
 display_video(embedding_with_recon_path)
+
+# <codecell>
+
+ls ../neural_clustering_data/
 
 # <markdowncell>
 
