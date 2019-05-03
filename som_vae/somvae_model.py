@@ -302,12 +302,6 @@ class SOMVAE:
                 h_encod_1      = tf.keras.layers.Dense(128, activation=_act_fn)(h_encod_0)
                 h_encod_2      = tf.keras.layers.Dense(64,  activation=_act_fn)(h_encod_1)
                 h_encod_3      = tf.keras.layers.Dense(32,  activation=_act_fn)(h_encod_2)
-                #h_encod_4      = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_3)
-                #h_norm_encod_4 = tf.keras.layers.BatchNormalization()(h_encod_4)
-                #h_encod_5      = tf.keras.layers.Dense(8,   activation=_act_fn)(h_norm_encod_4)
-                #h_norm_encod_5 = tf.keras.layers.BatchNormalization()(h_encod_5)
-                #h_encod_6      = tf.keras.layers.Dense(4,   activation=_act_fn)(h_norm_encod_5)
-                #h_norm_encod_6 = tf.keras.layers.BatchNormalization()(h_encod_6)
                 _z_e = tf.keras.layers.Dense(self.latent_dim,activation=_act_fn)(h_encod_3)
         return _z_e
 
@@ -328,12 +322,6 @@ class SOMVAE:
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                #h_x_embed_0    = tf.keras.layers.Dense(4,  activation=_act_fn)(self.z_q)
-                #h_norm_embed_0 = tf.keras.layers.BatchNormalization()(h_x_embed_0)
-                #h_x_embed_1    = tf.keras.layers.Dense(8,  activation=_act_fn)(h_norm_embed_0)
-                #h_norm_embed_1 = tf.keras.layers.BatchNormalization()(h_x_embed_1)
-                #h_x_embed_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_embed_1)
-                #h_norm_embed_2 = tf.keras.layers.BatchNormalization()(h_x_embed_1)
                 h_x_embed_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_q)
                 h_x_embed_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_embed_3)
                 h_x_embed_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_embed_4)
@@ -359,12 +347,6 @@ class SOMVAE:
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                #h_x_encod_0    = tf.keras.layers.Dense(4,  activation=_act_fn)(self.z_e)
-                #h_norm_encod_0 = tf.keras.layers.BatchNormalization()(h_x_encod_0)
-                #h_x_encod_1    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_0)
-                #h_norm_encod_1 = tf.keras.layers.BatchNormalization()(h_x_encod_1)
-                #h_x_encod_2    = tf.keras.layers.Dense(16,  activation=_act_fn)(h_norm_encod_1)
-                #h_norm_encod_2 = tf.keras.layers.BatchNormalization()(h_x_encod_2)
                 h_x_encod_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_e)
                 h_x_encod_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_encod_3)
                 h_x_encod_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_encod_4)
