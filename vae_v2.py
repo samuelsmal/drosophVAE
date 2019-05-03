@@ -10,10 +10,42 @@
 
 # <codecell>
 
+from datetime import date
+from datetime import timedelta
+
+#_NIGHTLY_VERSION_ = 20190312 # 20190430 # 20190502 # 20190312
+#_NIGHTLY_VERSION_ = str((date(2019, 3, 19) - timedelta(days=diff))).replace('-', '')
+#_NIGHTLY_VERSION_ = str((date.today() - timedelta(days=diff))).replace('-', '')
+#!pip -q install --upgrade tf-nightly==1.14.1-dev{_NIGHTLY_VERSION_} \
+#                          tf-nightly-gpu==1.14.1-dev{_NIGHTLY_VERSION_} \
+#                          tfp-nightly==0.7.0.dev20190312
+
+
+# <codecell>
+
+import tensorflow_probability as tfp
+
+# <codecell>
+
 # Import TensorFlow >= 1.9 and enable eager execution
 import tensorflow as tf
 tfe = tf.contrib.eager
 tf.enable_eager_execution()
+
+
+from tensorflow.python import tf2
+if not tf2.enabled():
+    #import tensorflow.compat.v2 as tf
+    import tensorflow.compat.v1 as tf
+    tf.enable_v2_behavior()
+    assert tf2.enabled()
+
+import tensorflow_probability as tfp
+
+tfk = tf.keras
+tfkl = tf.keras.layers
+tfpl = tfp.layers
+tfd = tfp.distributions
 
 import os
 import time
@@ -25,28 +57,21 @@ import PIL
 from IPython import display
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from som_vae.helpers.misc import extract_args, chunks, foldl
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.helpers import video, plots, misc, jupyter
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
-# <codecell>
+import inspect
 
-#! conda install tensorflow --yes
-#! pip install --upgrade tensorflow-probability
+from som_vae.helpers import tensorflow as _donotim
+print(inspect.getsource(_donotim))
 
-# <codecell>
+from tensorflow.python.client import device_lib
 
-import tensorflow_probability as tfp
+#device_lib.list_local_devices()
 
-tfk = tf.keras
-tfkl = tf.keras.layers
-tfpl = tfp.layers
-tfd = tfp.distributions
+#import tensorflow as tf
 
+_TF_DEFAULT_SESSION_CONFIG_ = tf.ConfigProto(device_count={'GPU': 1})
+_TF_DEFAULT_SESSION_CONFIG_.gpu_options.allow_growth = True 
+_TF_DEFAULT_SESSION_CONFIG_.gpu_options.polling_inactive_delay_msecs = 10
 from tensorflow.keras.utils import plot_model
 
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
@@ -60,6 +85,13 @@ from sklearn.manifold import TSNE
 import os
 
 #%matplotlib inline
+from som_vae.helpers.misc import extract_args, chunks, foldl
+from som_vae.helpers.jupyter import fix_layout, display_video
+from som_vae.settings import config, skeleton
+from som_vae.helpers import video, plots, misc, jupyter
+from som_vae import preprocessing
+from som_vae.helpers.logging import enable_logging
+#from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <codecell>
 
@@ -149,10 +181,6 @@ data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
 
 # <codecell>
 
-from tensorflow.contrib.distributions import MultivariateNormalDiag
-
-# <codecell>
-
 def dense_layers(sizes):
     return tfk.Sequential([tfkl.Dense(size, activation=tf.nn.leaky_relu) for size in sizes])
 
@@ -168,17 +196,23 @@ max_epochs = 1000
 # prior = tfd.Independent(tfd.Normal(loc=tf.zeros(latent_dim), scale=1),
 #                         reinterpreted_batch_ndims=1)
 
-prior = MultivariateNormalDiag(loc=tf.zeros([latent_dim]), 
-                               scale_identity_multiplier=1.0)
-
+#prior = tfd.MultivariateNormalDiag(loc=tf.zeros(latent_dim))
+prior = tfd.Independent(tfd.Normal(loc=tf.zeros(latent_dim), scale=1),
+                        
+reinterpreted_batch_ndims=1)
 encoder = tfk.Sequential([
     tfkl.InputLayer(input_shape=input_shape, name='encoder_input'),
     dense_layers(dense_layer_dims),
     tfkl.Dense(tfpl.MultivariateNormalTriL.params_size(latent_dim), activation=None),
-    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior)),
+    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior, weight=1.0)),
 ], name='encoder')
 
-encoder.summary()
+#            activity_regularizer=tfpl.KLDivergenceRegularizer(
+#           tfd.MultivariateNormalDiag(loc=tf.zeros(encoded_size)),
+#           weight=num_train_samples)),
+
+
+print(encoder.summary())
 #plot_model(encoder, to_file='vae_mlp_encoder.png', show_shapes=True)
 
 decoder = tfk.Sequential([
@@ -188,22 +222,22 @@ decoder = tfk.Sequential([
     tfpl.IndependentNormal(original_dim),
 ], name='decoder')
 
-decoder.summary()
+print(decoder.summary())
 #plot_model(decoder, to_file='vae_mlp_decoder.png', show_shapes=True)
 
+# Taking only the mean of the VAE `outputs[0]`
 vae = tfk.Model(inputs=encoder.inputs,
                 outputs=decoder(encoder.outputs[0]),
                 name='vae_mlp')
 
-negloglik = lambda x, rv_x: -rv_x.log_prob(x)
+negative_log_likelihood = lambda x, rv_x: -rv_x.log_prob(x)
 
-vae.compile(optimizer=tf.keras.optimizers.Nadam(), 
-            loss=negloglik)
+vae.compile(optimizer=tf.optimizers.Adam(learning_rate=1e-3), loss=negative_log_likelihood)
 
 vae.summary()
-plot_model(vae,
-           to_file='vae_mlp.png',
-           show_shapes=True)
+#plot_model(vae,
+#           to_file='vae_mlp.png',
+#           show_shapes=True)
 
 # <codecell>
 
@@ -212,7 +246,14 @@ tf_val = tf.data.Dataset.from_tensor_slices((data_test, data_test)).batch(batch_
 
 # <codecell>
 
-checkpointer = ModelCheckpoint(filepath=f"{config.__DATA_ROOT__}/experimental/model_checkpoints/vae_v2-0.1.0-mdl.h5", verbose=0, save_best_only=True)
+from pathlib import Path
+from datetime import datetime
+file_path_model_checkpoint = f"{config.__DATA_ROOT__}/neural_clustering_data/experimental/model_checkpoints/vae_v2-0.1.0_{datetime.now():%Y-%m-%d_%H-%M-%S%z}.h5"
+#Path(file_path_model_checkpoint).parent.mkdir(parents=True, exist_ok=True)
+
+checkpointer = ModelCheckpoint(filepath=file_path_model_checkpoint, 
+                               verbose=0,
+                               save_best_only=True)
 earlystopper = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.005, patience=20, verbose=0, restore_best_weights=True)
 
 hist = vae.fit(tf_train,
@@ -220,7 +261,9 @@ hist = vae.fit(tf_train,
                shuffle=True,
                verbose=0,
                validation_data=tf_val,
-               callbacks=[checkpointer, earlystopper])
+               steps_per_epoch=1,
+               validation_steps=1,
+               callbacks=[earlystopper])
 
 
 plot_loss(hist)
