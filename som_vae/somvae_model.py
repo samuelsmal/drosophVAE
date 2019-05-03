@@ -9,6 +9,10 @@ License: MIT License
 import functools
 import tensorflow as tf
 
+tfl  = tf.layers
+tfk  = tf.keras
+tfkl = tfk.layers
+
 
 def weight_variable(shape, name):
     """Creates a TensorFlow Variable with a given shape and name and truncated normal initialization."""
@@ -77,7 +81,7 @@ def conv1d(x, shape, name, stride=1):
 
 def max_pool_2x1(x):
     """Creates a 2x1 max-pooling layer."""
-    return tf.layers.max_pooling1d(x, pool_size=2, strides=2, padding='SAME')
+    return tfl.max_pooling1d(x, pool_size=2, strides=2, padding='SAME')
 
 
 def lazy_scope(function):
@@ -294,15 +298,15 @@ class SOMVAE:
                 h_pool2 = max_pool_2x2(h_conv2)
                 flat_size = 7*7*256
                 h_flat = tf.reshape(h_pool2, [-1, flat_size])
-                _z_e = tf.keras.layers.Dense(self.latent_dim)(h_flat)
+                _z_e = tfkl.Dense(self.latent_dim)(h_flat)
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("encoder"):
-                h_encod_0      = tf.keras.layers.Dense(256, activation=_act_fn)(self.inputs)
-                h_encod_1      = tf.keras.layers.Dense(128, activation=_act_fn)(h_encod_0)
-                h_encod_2      = tf.keras.layers.Dense(64,  activation=_act_fn)(h_encod_1)
-                h_encod_3      = tf.keras.layers.Dense(32,  activation=_act_fn)(h_encod_2)
-                _z_e = tf.keras.layers.Dense(self.latent_dim,activation=_act_fn)(h_encod_3)
+                h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
+                h_encod_1      = tfkl.Dense(128, activation=_act_fn)(h_encod_0)
+                h_encod_2      = tfkl.Dense(64,  activation=_act_fn)(h_encod_1)
+                h_encod_3      = tfkl.Dense(32,  activation=_act_fn)(h_encod_2)
+                _z_e           = tfkl.Dense(self.latent_dim, activation=_act_fn)(h_encod_3)
         return _z_e
 
 
@@ -312,21 +316,21 @@ class SOMVAE:
         if self.image_like_input:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 flat_size = 7*7*256
-                h_flat_dec = tf.keras.layers.Dense(flat_size)(self.z_q)
+                h_flat_dec = tfkl.Dense(flat_size)(self.z_q)
                 h_reshaped = tf.reshape(h_flat_dec, [-1, 7, 7, 256])
-                h_unpool1 = tf.keras.layers.UpSampling2D((2,2))(h_reshaped)
+                h_unpool1 = tfkl.UpSampling2D((2,2))(h_reshaped)
                 h_deconv1 = tf.nn.relu(conv2d(h_unpool1, [4,4,256,256], "deconv1"))
-                h_unpool2 = tf.keras.layers.UpSampling2D((2,2))(h_deconv1)
+                h_unpool2 = tfkl.UpSampling2D((2,2))(h_deconv1)
                 h_deconv2 = tf.nn.sigmoid(conv2d(h_unpool2, [4,4,256,1], "deconv2"))
                 x_hat = h_deconv2
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_x_embed_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_q)
-                h_x_embed_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_embed_3)
-                h_x_embed_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_embed_4)
-                h_x_embed_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_x_embed_5)
-                x_hat          = tf.keras.layers.Dense(self.input_channels, activation="sigmoid")(h_x_embed_6)
+                h_x_embed_3    = tfkl.Dense(32,  activation=_act_fn)(self.z_q)
+                h_x_embed_4    = tfkl.Dense(64,  activation=_act_fn)(h_x_embed_3)
+                h_x_embed_5    = tfkl.Dense(128, activation=_act_fn)(h_x_embed_4)
+                h_x_embed_6    = tfkl.Dense(256, activation=_act_fn)(h_x_embed_5)
+                x_hat          = tfkl.Dense(self.input_channels, activation="sigmoid")(h_x_embed_6)
 
         return x_hat
 
@@ -337,31 +341,27 @@ class SOMVAE:
         if self.image_like_input:
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
                 flat_size = 7*7*256
-                h_flat_dec = tf.keras.layers.Dense(flat_size)(self.z_e)
+                h_flat_dec = tfkl.Dense(flat_size)(self.z_e)
                 h_reshaped = tf.reshape(h_flat_dec, [-1, 7, 7, 256])
-                h_unpool1 = tf.keras.layers.UpSampling2D((2,2))(h_reshaped)
+                h_unpool1 = tfkl.UpSampling2D((2,2))(h_reshaped)
                 h_deconv1 = tf.nn.relu(conv2d(h_unpool1, [4,4,256,256], "deconv1"))
-                h_unpool2 = tf.keras.layers.UpSampling2D((2,2))(h_deconv1)
+                h_unpool2 = tfkl.UpSampling2D((2,2))(h_deconv1)
                 h_deconv2 = tf.nn.sigmoid(conv2d(h_unpool2, [4,4,256,1], "deconv2"))
                 x_hat = h_deconv2
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-                h_x_encod_3    = tf.keras.layers.Dense(32,  activation=_act_fn)(self.z_e)
-                h_x_encod_4    = tf.keras.layers.Dense(64,  activation=_act_fn)(h_x_encod_3)
-                h_x_encod_5    = tf.keras.layers.Dense(128, activation=_act_fn)(h_x_encod_4)
-                h_x_encod_6    = tf.keras.layers.Dense(256, activation=_act_fn)(h_x_encod_5)
-                x_hat          = tf.keras.layers.Dense(self.input_channels,
-                                                       activation="sigmoid")(h_x_encod_6)
+                h_x_encod_3    = tfkl.Dense(32,  activation=_act_fn)(self.z_e)
+                h_x_encod_4    = tfkl.Dense(64,  activation=_act_fn)(h_x_encod_3)
+                h_x_encod_5    = tfkl.Dense(128, activation=_act_fn)(h_x_encod_4)
+                h_x_encod_6    = tfkl.Dense(256, activation=_act_fn)(h_x_encod_5)
+                x_hat          = tfkl.Dense(self.input_channels, activation="sigmoid")(h_x_encod_6)
         return x_hat
 
 
     @lazy_scope
     def loss_reconstruction(self):
         """Computes the combined reconstruction loss for both reconstructions."""
-        print(f"shape of input: {self.inputs.shape}")
-        print(f"shape of x_hat_embedding: {self.x_hat_embedding.shape}")
-        print(f"shape of x_hat_encoding: {self.x_hat_encoding.shape}")
         loss_rec_mse_zq = tf.losses.mean_squared_error(self.inputs, self.x_hat_embedding)
         loss_rec_mse_ze = tf.losses.mean_squared_error(self.inputs, self.x_hat_encoding)
         loss_rec_mse = self.loss_reconstruction_embedding * loss_rec_mse_zq + self.loss_reconstruction_encoding * loss_rec_mse_ze
