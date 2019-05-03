@@ -123,6 +123,7 @@ def plot_reconstructed_angle_data(real_data, reconstructed_data, columns, fix_yl
     for a in range(real_data.shape[1]):
         axs[a].plot(real_data[:,a], c=_colors[0], label='real')
         axs[a].plot(reconstructed_data[:,a], c=_colors[1], label='reconstructed')
+        axs[a].set_title(f"col: {columns[a]}")
         if fix_ylim:
             axs[a].set_ylim(-np.pi, np.pi)
 
@@ -137,7 +138,7 @@ def plot_reconstructed_angle_data(real_data, reconstructed_data, columns, fix_yl
 def plot_angle_columns(data, columns):
     fig, axs = plt.subplots(nrows=1, ncols=len(columns), figsize=(30, 5))
     for i, c in enumerate(columns):
-        axs[i].set_title(f"angle nb: {c}")
-        axs[i].plot(data[:,c])
+        axs[i].set_title(f"angle: {c}")
+        axs[i].plot(data[:, i])
 
     return fig
