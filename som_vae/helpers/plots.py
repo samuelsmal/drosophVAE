@@ -1,6 +1,7 @@
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
 from som_vae.settings import config, skeleton
 
@@ -147,6 +148,57 @@ def plot_angle_columns(data, columns):
 
     fig.suptitle('Angle data')
 
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.97) # necessary for the title not to be in the first plot
+
+    return fig
+
+
+def plot_tnse(X, y, title='t-SNE'):
+    """X is really the data
+
+    y is a pandas dataframe with a column called `label`, which are of type _BehaviorLabel_
+    """
+    X_embedded = TSNE(n_components=2, random_state=42).fit_transform(X)
+
+    seen_labels = y.label.unique()
+
+    _cs = sns.color_palette(n_colors=len(seen_labels))
+
+    fig = plt.figure(figsize=(10, 10))
+
+    behaviour_colours = dict(zip(seen_labels, _cs))
+
+    for l, c in behaviour_colours.items():
+        _d = X_embedded[y['label'] == l]
+        # c=[c] since matplotlib asks for it
+        plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
+
+    plt.legend()
+    plt.title(title)
+
+    return fig
+
+
+def plot_2d_distribution(X_train, X_test, n_legs=3):
+    fig, ax = plt.subplots(nrows=n_legs, ncols=2, figsize=(10, 8))
+
+    for leg_idx in range(len(ax)):
+        for j in range(5 * 2):
+            cur_col = leg_idx * 10 + j
+            sns.distplot(X_train[:, cur_col],
+                         ax=ax[leg_idx][0],
+                         bins=50,
+                         label=f"col {cur_col}")
+            sns.distplot(X_test[:, cur_col],
+                         ax=ax[leg_idx][1],
+                         bins=50,
+                         label=f"col {cur_col}")
+
+    ax[0][0].set_title('training data')
+    ax[0][1].set_title('testing data')
+
+    fig.suptitle('distribution of input')
     plt.tight_layout()
     plt.subplots_adjust(top=0.97) # necessary for the title not to be in the first plot
 

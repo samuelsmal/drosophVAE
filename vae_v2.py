@@ -10,20 +10,24 @@
 
 # <codecell>
 
+_DEBUG_          = False # general flag for debug mode
+_D_ZERO_DATA_    = True  # basically a debug mode in order to overfit the model on the most simple data
+_USING_2D_DATA_  = True
+
+assert _USING_2D_DATA_, '3d currently not implemented'
+
+# <codecell>
+
 from datetime import date
 from datetime import timedelta
 
-#_NIGHTLY_VERSION_ = 20190312 # 20190430 # 20190502 # 20190312
+_NIGHTLY_VERSION_ = 20190312 # 20190430 # 20190502 # 20190312
 #_NIGHTLY_VERSION_ = str((date(2019, 3, 19) - timedelta(days=diff))).replace('-', '')
 #_NIGHTLY_VERSION_ = str((date.today() - timedelta(days=diff))).replace('-', '')
 #!pip -q install --upgrade tf-nightly==1.14.1-dev{_NIGHTLY_VERSION_} \
 #                          tf-nightly-gpu==1.14.1-dev{_NIGHTLY_VERSION_} \
 #                          tfp-nightly==0.7.0.dev20190312
-
-
-# <codecell>
-
-import tensorflow_probability as tfp
+#!pip -q install --upgrade tf-nightly tf-nightly-gpu tfp-nightly
 
 # <codecell>
 
@@ -35,8 +39,8 @@ tf.enable_eager_execution()
 
 from tensorflow.python import tf2
 if not tf2.enabled():
-    #import tensorflow.compat.v2 as tf
-    import tensorflow.compat.v1 as tf
+    import tensorflow.compat.v2 as tf
+    #import tensorflow.compat.v1 as tf
     tf.enable_v2_behavior()
     assert tf2.enabled()
 
@@ -57,30 +61,25 @@ import PIL
 from IPython import display
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-
 import inspect
 
-from som_vae.helpers import tensorflow as _donotim
-print(inspect.getsource(_donotim))
+# Doesn't work with TF2
+#from keras.backend.tensorflow_backend import set_session
+#config = tf.ConfigProto()
+#config.gpu_options.allow_growth = True  # dynamically grow the memory used on the GPU
+#sess = tf.Session(config=config)
+#set_session(sess) # set this TensorFlow session as the default session for Keras
 
-from tensorflow.python.client import device_lib
-
-#device_lib.list_local_devices()
-
-#import tensorflow as tf
-
-_TF_DEFAULT_SESSION_CONFIG_ = tf.ConfigProto(device_count={'GPU': 1})
-_TF_DEFAULT_SESSION_CONFIG_.gpu_options.allow_growth = True 
-_TF_DEFAULT_SESSION_CONFIG_.gpu_options.polling_inactive_delay_msecs = 10
 from tensorflow.keras.utils import plot_model
 
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.model_selection import train_test_split 
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score, roc_auc_score, roc_curve
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.manifold import TSNE
 import os
 
@@ -91,7 +90,6 @@ from som_vae.settings import config, skeleton
 from som_vae.helpers import video, plots, misc, jupyter
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
-#from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <codecell>
 
@@ -142,12 +140,18 @@ frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
 # <codecell>
 
 # flatten the data
-reshaped_joint_position = joint_positions[:,:,: config.NB_DIMS].reshape(joint_positions.shape[0], -1).astype(np.float32)
+if _USING_2D_DATA_:
+    reshaped_joint_position = joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32)
+else:
+    raise NotImplementedError()
 
+if _DEBUG_ and _D_ZERO_DATA_:
+    reshaped_joint_position = np.zeros_like(reshaped_joint_position)
 
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction
-scaler = MinMaxScaler()
+#scaler = MinMaxScaler()
+scaler = StandardScaler()
 #resh = scaler.fit_transform(resh)
 
 print(f"total number of input data:{reshaped_joint_position.shape}")
@@ -161,10 +165,10 @@ print(f"total number of input data:{reshaped_joint_position.shape}")
 #    
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
 # train - test split
-nb_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
+n_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
 #
-data_train = scaler.fit_transform(reshaped_joint_position[:nb_of_data_points])
-data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
+data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
+data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
 # just generating some labels, no clue what they are for except validation?
 #labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
 
@@ -181,6 +185,25 @@ data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
 
 # <codecell>
 
+pd.DataFrame(data_train).describe()
+
+# <codecell>
+
+plots.plot_tnse(np.concatenate((data_train, data_test)), frames_idx_with_labels);
+
+# <codecell>
+
+if _USING_2D_DATA_:
+    plots.plot_2d_distribution(data_train, data_test);
+else:
+    raise ValueError('not yet implemented for 3d data')
+
+# <codecell>
+
+
+
+# <codecell>
+
 def dense_layers(sizes):
     return tfk.Sequential([tfkl.Dense(size, activation=tf.nn.leaky_relu) for size in sizes])
 
@@ -188,29 +211,21 @@ tf.reset_default_graph()
 
 original_dim = data_train.shape[1]
 input_shape = data_train[0].shape
-dense_layer_dims = [20, 10, 8]
-latent_dim = 2
+latent_dim = 10
+dense_layer_dims = np.linspace(input_shape, latent_dim, 4).astype(np.int)
 batch_size = 128
 max_epochs = 1000
 
-# prior = tfd.Independent(tfd.Normal(loc=tf.zeros(latent_dim), scale=1),
-#                         reinterpreted_batch_ndims=1)
 
-#prior = tfd.MultivariateNormalDiag(loc=tf.zeros(latent_dim))
-prior = tfd.Independent(tfd.Normal(loc=tf.zeros(latent_dim), scale=1),
-                        
-reinterpreted_batch_ndims=1)
+prior = tfd.MultivariateNormalDiag(loc=tf.zeros(latent_dim))
+#prior = tfd.Independent(tfd.Normal(loc=tf.zeros(latent_dim), scale=1), reinterpreted_batch_ndims=1)
+
 encoder = tfk.Sequential([
     tfkl.InputLayer(input_shape=input_shape, name='encoder_input'),
     dense_layers(dense_layer_dims),
     tfkl.Dense(tfpl.MultivariateNormalTriL.params_size(latent_dim), activation=None),
-    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior, weight=1.0)),
+    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior, weight=0.5)),
 ], name='encoder')
-
-#            activity_regularizer=tfpl.KLDivergenceRegularizer(
-#           tfd.MultivariateNormalDiag(loc=tf.zeros(encoded_size)),
-#           weight=num_train_samples)),
-
 
 print(encoder.summary())
 #plot_model(encoder, to_file='vae_mlp_encoder.png', show_shapes=True)
@@ -232,7 +247,7 @@ vae = tfk.Model(inputs=encoder.inputs,
 
 negative_log_likelihood = lambda x, rv_x: -rv_x.log_prob(x)
 
-vae.compile(optimizer=tf.optimizers.Adam(learning_rate=1e-3), loss=negative_log_likelihood)
+vae.compile(optimizer=tf.keras.optimizers.Adam(), loss=negative_log_likelihood)
 
 vae.summary()
 #plot_model(vae,
@@ -241,8 +256,14 @@ vae.summary()
 
 # <codecell>
 
-tf_train = tf.data.Dataset.from_tensor_slices((data_train, data_train)).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE).shuffle(int(10e4))
-tf_val = tf.data.Dataset.from_tensor_slices((data_test, data_test)).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE).shuffle(int(10e4))
+tf_train = tf.data.Dataset.from_tensor_slices((data_train, data_train))\
+             .batch(batch_size)\
+             .prefetch(tf.data.experimental.AUTOTUNE)\
+             .shuffle(int(10e4))
+tf_val = tf.data.Dataset.from_tensor_slices((data_test, data_test))\
+           .batch(batch_size)\
+           .prefetch(tf.data.experimental.AUTOTUNE)\
+           .shuffle(int(10e4))
 
 # <codecell>
 
@@ -254,6 +275,7 @@ file_path_model_checkpoint = f"{config.__DATA_ROOT__}/neural_clustering_data/exp
 checkpointer = ModelCheckpoint(filepath=file_path_model_checkpoint, 
                                verbose=0,
                                save_best_only=True)
+
 earlystopper = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.005, patience=20, verbose=0, restore_best_weights=True)
 
 hist = vae.fit(tf_train,
@@ -261,9 +283,7 @@ hist = vae.fit(tf_train,
                shuffle=True,
                verbose=0,
                validation_data=tf_val,
-               steps_per_epoch=1,
-               validation_steps=1,
-               callbacks=[earlystopper])
+               callbacks=[checkpointer, earlystopper])
 
 
 plot_loss(hist)
@@ -292,12 +312,22 @@ def _reverse_to_original_shape_(pos_data, input_shape=None):
         
     return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
-reconstructed_train =  _reverse_to_original_shape_()
+reconstructed_train =  _reverse_to_original_shape_(vae(data_train).sample())
+reconstructed_test  =  _reverse_to_original_shape_(vae(data_test).sample())
+
+# <codecell>
+
+plots.plot_2d_distribution(reshaped_joint_position[:n_of_data_points], reshaped_joint_position[n_of_data_points:]);
+
+# <codecell>
+
+plots.plot_2d_distribution(reconstructed_train, reconstructed_test);
 
 # <codecell>
 
 plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                       np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), validation_cut_off=nb_of_data_points)
+                                                       np.vstack((reconstructed_train, reconstructed_test)).reshape(-1, 15, 2), 
+                                                       validation_cut_off=n_of_data_points)
 
 # <markdowncell>
 
@@ -339,9 +369,14 @@ plt.show()
 
 # <codecell>
 
+seen_labels =  frames_idx_with_labels.label.unique()
+
 x_log_prob = reconstruction_log_prob(X, reconstruct_samples_n)
 #ax = plt.hist(x_log_prob, 60)
-plt.hist([x_log_prob[frames_idx_with_labels['label'] == l] for l in seen_labels], 60)
+for l in seen_labels:
+    sns.distplot(x_log_prob[frames_idx_with_labels['label'] == l], label=l.name)
+    
+plt.legend()
 plt.title('reconstruction log probability')
 plt.ylabel('frequency')
 plt.xlabel("log p(x|x')")
