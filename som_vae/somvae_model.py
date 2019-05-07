@@ -302,6 +302,7 @@ class SOMVAE:
         else:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("encoder"):
+                # TODO add an `input` layer here
                 h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
                 h_encod_1      = tfkl.Dense(128, activation=_act_fn)(h_encod_0)
                 h_encod_2      = tfkl.Dense(64,  activation=_act_fn)(h_encod_1)

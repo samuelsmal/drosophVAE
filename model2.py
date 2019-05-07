@@ -496,9 +496,6 @@ som_vae_config = {
     "time_sequence_length": 10
 }
 
-# todo add git commit hash to config name
-# todo change _name_ to something meaningful
-
 if all(som_vae_config[l] == 0.0 for l in ['alpha', 'beta', 'gamma', 'tau']):
     _loss_description_ = 'only-recon-loss'
 else:

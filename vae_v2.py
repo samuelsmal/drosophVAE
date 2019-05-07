@@ -13,6 +13,7 @@
 _DEBUG_          = False # general flag for debug mode
 _D_ZERO_DATA_    = True  # basically a debug mode in order to overfit the model on the most simple data
 _USING_2D_DATA_  = True
+_USE_EARLY_STOPPING_ = False
 
 assert _USING_2D_DATA_, '3d currently not implemented'
 
@@ -200,21 +201,16 @@ else:
 
 # <codecell>
 
-
-
-# <codecell>
-
 def dense_layers(sizes):
     return tfk.Sequential([tfkl.Dense(size, activation=tf.nn.leaky_relu) for size in sizes])
 
-tf.reset_default_graph()
-
 original_dim = data_train.shape[1]
 input_shape = data_train[0].shape
-latent_dim = 10
+latent_dim = input_shape[0] # 10
 dense_layer_dims = np.linspace(input_shape, latent_dim, 4).astype(np.int)
 batch_size = 128
 max_epochs = 1000
+kl_divergence_regularizer_weight = 0.5
 
 
 prior = tfd.MultivariateNormalDiag(loc=tf.zeros(latent_dim))
@@ -224,7 +220,7 @@ encoder = tfk.Sequential([
     tfkl.InputLayer(input_shape=input_shape, name='encoder_input'),
     dense_layers(dense_layer_dims),
     tfkl.Dense(tfpl.MultivariateNormalTriL.params_size(latent_dim), activation=None),
-    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior, weight=0.5)),
+    tfpl.MultivariateNormalTriL(latent_dim, activity_regularizer=tfpl.KLDivergenceRegularizer(prior, weight=kl_divergence_regularizer_weight)),
 ], name='encoder')
 
 print(encoder.summary())
@@ -247,7 +243,7 @@ vae = tfk.Model(inputs=encoder.inputs,
 
 negative_log_likelihood = lambda x, rv_x: -rv_x.log_prob(x)
 
-vae.compile(optimizer=tf.keras.optimizers.Adam(), loss=negative_log_likelihood)
+vae.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=3e-4), loss=negative_log_likelihood)
 
 vae.summary()
 #plot_model(vae,
@@ -278,12 +274,18 @@ checkpointer = ModelCheckpoint(filepath=file_path_model_checkpoint,
 
 earlystopper = EarlyStopping(monitor='val_loss', mode='min', min_delta=0.005, patience=20, verbose=0, restore_best_weights=True)
 
+callbacks = [checkpointer]
+
+if _USE_EARLY_STOPPING_:
+    callbacks += [earlystopper]
+
+tf.reset_default_graph()
 hist = vae.fit(tf_train,
                epochs=max_epochs,
                shuffle=True,
                verbose=0,
                validation_data=tf_val,
-               callbacks=[checkpointer, earlystopper])
+               callbacks=callbacks)
 
 
 plot_loss(hist)
@@ -372,7 +374,6 @@ plt.show()
 seen_labels =  frames_idx_with_labels.label.unique()
 
 x_log_prob = reconstruction_log_prob(X, reconstruct_samples_n)
-#ax = plt.hist(x_log_prob, 60)
 for l in seen_labels:
     sns.distplot(x_log_prob[frames_idx_with_labels['label'] == l], label=l.name)
     
