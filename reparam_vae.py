@@ -345,14 +345,13 @@ def if_last(ls):
     for i, x in enumerate(ls):
         yield i + 1 == len(ls), x
 
-def dense_layers(sizes, name, activation_fn=tf.nn.leaky_relu):
+def dense_layers(sizes, activation_fn=tf.nn.leaky_relu):
     # no activation in the last layer, because 
-    return tfk.Sequential([tfkl.Dense(size, activation=None if is_last else activation_fn) for is_last, size in if_last(sizes)], 
-                          name=name)
+    return [tfkl.Dense(size, activation=None if is_last else activation_fn) for is_last, size in if_last(sizes)]
 
 
 class R_VAE(tf.keras.Model):
-    def __init__(self, latent_dim, input_shape, batch_size, n_layers=3, dropout_rate_temporal=0.2):
+    def __init__(self, latent_dim, input_shape, batch_size, n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0):
         """
         Args:
         -----
@@ -368,17 +367,19 @@ class R_VAE(tf.keras.Model):
         self.latent_dim = latent_dim
         self._input_shape = input_shape
         self._batch_size = batch_size
+        self._loss_weight_reconstruction = loss_weight_reconstruction
+        self._loss_weight_kl = loss_weight_kl
         self._layer_sizes_inference  = np.linspace(input_shape[-1], 2 * latent_dim, n_layers).astype(np.int)
         # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
         # the 2 * n_layers is to keep compression speed roughly the same
-        self._layer_sizes_generative = np.linspace(latent_dim, input_shape[-1], 2 * n_layers).astype(np.int).tolist() + [input_shape[-1]]
+        self._layer_sizes_generative = np.linspace(latent_dim, input_shape[-1], 2 * n_layers).astype(np.int).tolist()
         
         self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape[-1]),
-                                                 dense_layers(self._layer_sizes_inference, name='inference_net_dense_layers')],
+                                                 *dense_layers(self._layer_sizes_inference)],
                                                  name='inference_net')
 
         self.generative_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=(latent_dim,)),
-                                                  dense_layers(self._layer_sizes_generative, name='generative_net_dense_layers')],
+                                                  *dense_layers(self._layer_sizes_generative)],
                                                   name='generative_net')
         
         if len(input_shape) == 1:
@@ -430,6 +431,8 @@ class R_VAE(tf.keras.Model):
             "batch_size": self._batch_size,
             "layer_sizes_inference": self._layer_sizes_inference,
             "layer_sizes_generative": self._layer_sizes_generative,
+            "loss_weight_reconstruction": self._loss_weight_reconstruction,
+            "loss_weight_kl": self._loss_weight_kl,
         }
 
 # <markdowncell>
@@ -462,9 +465,7 @@ data_test.shape
 
 def log_normal_pdf(sample, mean, logvar, raxis=1):
     log2pi = tf.log(2. * np.pi)
-    return tf.reduce_sum(
-        -.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi),
-        axis=raxis)
+    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
 
 def compute_loss(model, x):
     mean, logvar = model.encode(x)
@@ -482,9 +483,9 @@ def compute_loss(model, x):
     logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
     
     # KL loss
-    logpz = log_normal_pdf(z, 0., 0.)
+    logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
     logqz_x = log_normal_pdf(z, mean, logvar)
-    return -tf.reduce_mean(logpx_z + logpz - logqz_x)
+    return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
 
 def compute_gradients(model, x): 
     with tf.GradientTape() as tape: 
@@ -512,10 +513,16 @@ tf.reset_default_graph()
 test_losses = []
 train_losses = []
 
-model = R_VAE(latent_dim, input_shape=data_train.shape[1:], batch_size=run_config['batch_size'], n_layers=4, dropout_rate_temporal=0.2)
+model = R_VAE(latent_dim, 
+              input_shape=data_train.shape[1:], 
+              batch_size=run_config['batch_size'], 
+              n_layers=4, 
+              dropout_rate_temporal=0.2,
+              loss_weight_reconstruction=1.0,
+              loss_weight_kl=0.0)
 
-model.inference_net.get_layer('inference_net_dense_layers').summary()
-model.generative_net.get_layer('generative_net_dense_layers').summary()
+model.inference_net.summary()
+model.generative_net.summary()
 
 # <codecell>
 
