@@ -53,7 +53,7 @@ def full_experiment_id(study_id=STUDY_ID, experiment_id=EXPERIMENT_ID, fly_id=FL
     return f"{study_id}-{experiment_id}-{fly_id}"
 
 
-def positional_data(experiment, dimensions='2d', pattern='pose_result'):
+def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=__EXPERIMENT_ROOT__):
     """
     Returns the positional data for the given experiment.
 
@@ -70,15 +70,19 @@ def positional_data(experiment, dimensions='2d', pattern='pose_result'):
     numpy array of found data
 
     """
-    base = PATH_EXPERIMENT.format(base_path=__EXPERIMENT_ROOT__,
+    base = PATH_EXPERIMENT.format(base_path=base_path,
                                   study_id=experiment.study_id,
                                   fly_id=experiment.fly_id,
                                   experiment_id=experiment.experiment_id)
 
     pos_data_path = PATH_EXPERIMENT_POSITIONAL_DATA.format(base_experiment_path=base)
 
-    pose = [p for p in pathlib.Path(pos_data_path).iterdir()
-            if pattern in p.name][0]
+    try:
+        pose = [p for p in pathlib.Path(pos_data_path).iterdir()
+                if pattern in p.name][0]
+    except (IndexError, FileNotFoundError) as e:
+        print(f"huh?? something odd with {experiment}: {pathlib.Path(pos_data_path)}")
+        return None
 
     with open(pose, 'rb') as f:
         return pickle.load(f)[f'points{dimensions}']

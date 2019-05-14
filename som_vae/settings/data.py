@@ -18,6 +18,9 @@ Experiment = namedtuple('Experiment', 'study_id, fly_id, experiment_id, key')
 __LabelledData__ = namedtuple('LabelledData', 'sequence, label, study_id, fly_id, experiment_id')
 
 
+def _key_from_list_(ls):
+    return '-'.join(ls)
+
 def _key_(x:__LabelledData__):
     return f"{x.study_id}-{x.fly_id}-{x.experiment_id}"
 

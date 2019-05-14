@@ -9,6 +9,8 @@ License: MIT License
 import functools
 import tensorflow as tf
 
+from som_vae.temporal_conv_net import TemporalConvNet
+
 tfl  = tf.layers
 tfk  = tf.keras
 tfkl = tfk.layers
@@ -112,10 +114,11 @@ def lazy_scope(function):
 class SOMVAE:
     """Class for the SOM-VAE model as described in https://arxiv.org/abs/1806.02199"""
 
-    def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4, decay_factor=0.95, decay_steps=1000,
-            input_length=28, input_channels=28, alpha=1., beta=1., gamma=1., tau=1.,
-                 image_like_input=True,
-                 loss_reconstruction_embedding=1., loss_reconstruction_encoding=1., config=None):
+    def __init__(self, inputs, latent_dim=64, som_dim=[8,8], learning_rate=1e-4,
+                 decay_factor=0.95, decay_steps=1000, input_length=28,
+                 input_channels=28, alpha=1., beta=1., gamma=1., tau=1.,
+                 image_like_input=True, loss_reconstruction_embedding=1.,
+                 loss_reconstruction_encoding=1., config=None):
         """Initialization method for the SOM-VAE model object.
 
         Args:
@@ -303,7 +306,13 @@ class SOMVAE:
             _act_fn = self.config['activation_fn']
             with tf.variable_scope("encoder"):
                 # TODO add an `input` layer here
-                h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
+                # TODO adapt the layer sizes... this is shit...
+                if self.config['use_temporal_conv']:
+                    h_tcn          = TemporalConvNet(num_channels=[self.config['input_channels']] * 3, name='temporal_layer')(self.inputs)
+                    h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
+                    h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
+                else:
+                    h_encod_0      = tfkl.Dense(256, activation=_act_fn)(self.inputs)
                 h_encod_1      = tfkl.Dense(128, activation=_act_fn)(h_encod_0)
                 h_encod_2      = tfkl.Dense(64,  activation=_act_fn)(h_encod_1)
                 h_encod_3      = tfkl.Dense(32,  activation=_act_fn)(h_encod_2)

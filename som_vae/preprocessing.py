@@ -1,6 +1,7 @@
+import warnings
 import logging
 import pickle
-from functools import reduce
+from functools import reduce, partial
 from functional import seq
 
 
@@ -57,7 +58,7 @@ def get_positional_data(path):
 def add_third_dimension(joint_positions):
     # just add a z-axis
     # look up np.pad...
-    # assumes that the positional data is in the last axis
+    # assumes that the positional (channels) data is in the last axis
     paddings = [[0, 0] for i in joint_positions.shape]
     paddings[-1][1] = 1
 
@@ -69,13 +70,10 @@ def get_only_first_legs(joint_positions):
 
 def normalize(joint_positions, using_median=True, to_probability_distr=False):
     # alternatives could be to use only the median of the first joint -> data is then fixed to top (is that differnt to now?)
-    if using_median:
-        applied = np.median(joint_positions.reshape(-1, joint_positions.shape[-1]), axis=0)
-        return joint_positions - applied, applied
-    elif to_probability_distr:
-        return
-    else:
-        raise NotImplementedError
+    # TODO clean up signature.
+    #warnings.warn('here in normalize signature is deprecated')
+    applied = np.median(joint_positions.reshape(-1, joint_positions.shape[-1]), axis=0)
+    return joint_positions - applied, applied
 
 def normalize_ts(time_series, ax=0):
     # for shape (frame,feat)
@@ -102,8 +100,9 @@ def normalize_pose(points3d, median3d=False):
     return points3d
 
 
-def get_data_and_normalization(data):
-    ret = seq(data).map(config.positional_data)\
+def get_data_and_normalization(data, per_experiment=False):
+    ret = seq(data).map(partial(config.positional_data))\
+                    .filter(lambda x: x is not None)\
                     .map(_simple_checks_)\
                     .map(_get_camera_of_interest_)\
                     .map(_get_visible_legs_)\
@@ -111,7 +110,10 @@ def get_data_and_normalization(data):
                     .map(get_only_first_legs)\
                     .to_list()
 
-    return normalize(np.vstack(ret))
+    if per_experiment:
+        return ret
+    else:
+        return normalize(np.vstack(ret))
 
 
 def get_frames_with_idx_and_labels(data):
