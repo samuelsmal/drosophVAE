@@ -32,11 +32,14 @@ run_config = {
 # Import TensorFlow >= 1.9 and enable eager execution
 import tensorflow as tf
 tfe = tf.contrib.eager
+tfc = tf.contrib
 tf.enable_eager_execution()
 
 tfk = tf.keras
 tfkl = tf.keras.layers
 
+import json
+from collections import namedtuple
 import warnings
 import os
 import time
@@ -146,11 +149,16 @@ else:
 
     frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
 
-    #frames_of_interest = frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.GROOM_ANT, settings.data._BehaviorLabel_.WALK_FORW, settings.data._BehaviorLabel_.REST])
+    images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+                                           .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+                                           .to_list()
+    
     frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
-
+    
+    # TODO form a wrapper around them
     joint_positions = joint_positions[frames_of_interest]
     frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
+    images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
 
 # <markdowncell>
 
@@ -311,7 +319,7 @@ class TemporalBlock(tfkl.Layer):
             inputs = self.down_sample(inputs)
         return tf.nn.relu(x + inputs)
 
-class TemporalConvNet(tf.layers.Layer):
+class TemporalConvNet(tfkl.Layer):
     def __init__(self, num_channels, kernel_size=3, dropout=0.2,
                  trainable=True, name=None, dtype=None, 
                  activity_regularizer=None, **kwargs):
@@ -424,6 +432,10 @@ class R_VAE(tf.keras.Model):
         z = model.reparameterize(mean, logvar)
         return model.decode(z, apply_sigmoid=True)
     
+    def call(self, x, training=False, apply_sigmoid=False):
+        return self.decode(self.reparameterize(*self.encode(x, training=training)), 
+                           apply_sigmoid=apply_sigmoid)
+    
     def _config_(self):
         return {
             "latent_dim": self.latent_dim,
@@ -502,8 +514,14 @@ def apply_gradients(optimizer, gradients, variables, global_step=None):
 
 # <codecell>
 
-epochs = 10
+from datetime import datetime
 
+def get_config_hash(config, digest_length=5):
+    return str(hash(json.dumps({**run_config, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
+
+# <codecell>
+
+# This is the init cell. The model and all related objects are created here.
 if run_config['debug'] and run_config['d_no_compression']:
     latent_dim=data_train.shape[-1]
 else:
@@ -524,10 +542,20 @@ model = R_VAE(latent_dim,
 model.inference_net.summary()
 model.generative_net.summary()
 
+_CONFIG_HASH_ = get_config_hash({**model._config_(), **run_config})
+
+_base_path_ = f"{settings.config.__DATA_ROOT__}/neural_clustering_data/tvae_logs/{_CONFIG_HASH_}"
+train_log_dir = _base_path_ + '/train'
+test_log_dir = _base_path_ + '/test'
+train_summary_writer = tfc.summary.create_file_writer(train_log_dir)
+test_summary_writer = tfc.summary.create_file_writer(test_log_dir)
+
+global_step = tf.train.get_or_create_global_step()
+
+
 # <codecell>
 
-print(f"will train model {model._config_()}, with global params: {run_config}")
-# TODO add tensorboard stuff
+# This is the run cell. Designed to be able to train the model for an arbitrary amount of epochs.
 def _compute_loss_for_data_(model, data):
     loss = tfe.metrics.Mean()
     for x in data:
@@ -536,8 +564,7 @@ def _compute_loss_for_data_(model, data):
     
     return elbo
 
-#print(f"will train for {epochs} epochs")
-#for epoch in range(1, epochs + 1):
+print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_CONFIG_HASH_}")
 print(f"will train for ever...")
 epoch = len(train_losses)
 while True:
@@ -546,14 +573,52 @@ while True:
         gradients, loss = compute_gradients(model, train_x)
         apply_gradients(optimizer, gradients, model.trainable_variables)
     end_time = time.time()
-
+        
     test_losses += [_compute_loss_for_data_(model, test_dataset)]
     train_losses += [_compute_loss_for_data_(model, train_dataset)]
-
+    
+    with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
+        tfc.summary.scalar('loss', train_losses[-1], step=epoch)
+  
+    with test_summary_writer.as_default(), tfc.summary.always_record_summaries():
+        tfc.summary.scalar('loss', test_losses[-1], step=epoch)
+    
     if epoch % 10 == 0:
         print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
+        tfc.summary.flush()
         
     epoch += 1
+
+# <codecell>
+
+#print(f"will train model {model._config_()}, with global params: {run_config}")
+## TODO add tensorboard stuff
+#def _compute_loss_for_data_(model, data):
+#    loss = tfe.metrics.Mean()
+#    for x in data:
+#        loss(compute_loss(model, x))
+#    elbo = -loss.result()
+#    
+#    return elbo
+#
+##print(f"will train for {epochs} epochs")
+##for epoch in range(1, epochs + 1):
+#print(f"will train for ever...")
+#epoch = len(train_losses)
+#while True:
+#    start_time = time.time()
+#    for train_x in train_dataset:
+#        gradients, loss = compute_gradients(model, train_x)
+#        apply_gradients(optimizer, gradients, model.trainable_variables)
+#    end_time = time.time()
+#
+#    test_losses += [_compute_loss_for_data_(model, test_dataset)]
+#    train_losses += [_compute_loss_for_data_(model, train_dataset)]
+#
+#    if epoch % 10 == 0:
+#        print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
+#        
+#    epoch += 1
 
 # <codecell>
 
@@ -601,226 +666,86 @@ else:
                                                            pred_train_rev,
                                                            validation_cut_off=data_train.shape[0])
 
+# <markdowncell>
+
+# # Latent space
+
 # <codecell>
 
-stop
-reload(plots)
-if config.NB_DIMS == 3:
-    if som_vae_config['time_series']:
-        _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
-        timed_jp = joint_positions[_time_series_idx_]
-    else:
-        timed_jp = joint_positions
-        
-    f = plots.plot_reconstructed_angle_data(real_data=timed_jp,
-                                            reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
-                                            columns=angled_data_columns)
-    p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
-    pathlib.Path(p).parent.mkdir(exist_ok=True)
-    f.savefig(p)
-else:
-    if som_vae_config['time_series']:
-        _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
-        timed_jp = joint_positions[_time_series_idx_]
+_all_input_ = np.vstack((data_train, data_test))
 
-        plots.plot_comparing_joint_position_with_reconstructed(timed_jp, 
-                                                               np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
-                                                               validation_cut_off=nb_of_data_points)
-    else:
-        plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                               np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
-                                                               validation_cut_off=nb_of_data_points)
+# <codecell>
 
-        plots.plot_comparing_joint_position_with_reconstructed(joint_positions, 
-                                                               np.vstack((reconstructed_from_embedding_train, reconstructed_from_embedding_val)), 
-                                                               validation_cut_off=nb_of_data_points)
+from hdbscan import HDBSCAN
+
+# <codecell>
+
+from collections import namedtuple
+from sklearn.manifold import TSNE
+
+LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
+
+X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(_all_input_)))
+X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
+
+cluster_assignments = HDBSCAN(min_cluster_size=4).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+
+plt.figure(figsize=(20, 12))
+for cluster in np.unique(cluster_assignments):
+    c_idx = cluster_assignments == cluster
+    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster)
+    
+plt.title('T-SNE proejection of latent space (mean & var stacked)');
 
 # <markdowncell>
 
-# # Graveyard
+# # videos
 
 # <codecell>
 
-#class TemporalBlock(tf.keras.Model):
-#    def __init__(self, dilation_rate, nb_filters, kernel_size, padding, dropout_rate=0.0): 
-#        super(TemporalBlock, self).__init__()
-#        # TODO check if this is correct
-#        init = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.01)
-#        assert padding in ['causal', 'same']
-#
-#        # block1
-#        self.conv1  = tfkl.Conv1D(filters=nb_filters, kernel_size=kernel_size, dilation_rate=dilation_rate, padding=padding, kernel_initializer=init)
-#        self.batch1 = tfkl.BatchNormalization(axis=-1)
-#        self.ac1    = tfkl.Activation('relu')
-#        self.drop1  = tfkl.Dropout(rate=dropout_rate)
-#        
-#        # block2
-#        self.conv2  = tfkl.Conv1D(filters=nb_filters, kernel_size=kernel_size, dilation_rate=dilation_rate, padding=padding, kernel_initializer=init)
-#        self.batch2 = tfkl.BatchNormalization(axis=-1)        
-#        self.ac2    = tfkl.Activation('relu')
-#        self.drop2  = tfkl.Dropout(rate=dropout_rate)
-#
-#        self.downsample = tfkl.Conv1D(filters=nb_filters, kernel_size=1, padding='same', kernel_initializer=init)
-#        self.ac3    = tfkl.Activation('relu')
-#
-#
-#    def call(self, x, training):
-#        prev_x = x
-#        x = self.conv1(x)
-#        x = self.batch1(x)
-#        x = self.ac1(x)
-#        x = self.drop1(x) if training else x
-#
-#        x = self.conv2(x)
-#        x = self.batch2(x)
-#        x = self.ac2(x)
-#        x = self.drop2(x) if training else x
-#
-#        if prev_x.shape[-1] != x.shape[-1]:    # match the dimention
-#            prev_x = self.downsample(prev_x)
-#        assert prev_x.shape == x.shape
-#
-#        return self.ac3(prev_x + x)            # skip connection
-#
-#
-#
-#class TemporalConvNet(tf.keras.Model):
-#    def __init__(self, num_channels, kernel_size=2, dropout=0.2):
-#        # num_channels is a list contains hidden sizes of Conv1D
-#        super(TemporalConvNet, self).__init__()
-#        assert isinstance(num_channels, list)
-#
-#        model = tf.keras.Sequential()
-#
-#        # The model contains "num_levels" TemporalBlock
-#        num_levels = len(num_channels)
-#        for i in range(num_levels):
-#            dilation_rate = 2 ** i                  # exponential growth
-#            model.add(TemporalBlock(dilation_rate=dilation_rate, nb_filters=num_channels[i], kernel_size=kernel_size, padding='causal', dropout_rate=dropout))
-#        self.network = model
-#
-#    def call(self, x, training):
-#        return self.network(x, training=training)
+def reverse_pos_pipeline(x, normalisation_term=normalisation_factors):
+    """TODO This is again pretty shitty... ultra hidden global variable"""
+    return x + normalisation_term[:x.shape[-1]]
 
-# V3
-from typing import List, Tuple
-
-import keras.backend as K
-import keras.layers
-from keras import optimizers
-from keras.engine.topology import Layer
-from keras.layers import Activation, Lambda
-from keras.layers import Conv1D, SpatialDropout1D
-from keras.layers import Convolution1D, Dense
-from keras.models import Input, Model
-
-
-def residual_block(x, dilation_rate, nb_filters, kernel_size, padding, dropout_rate=0):
-    # type: (Layer, int, int, int, str, float) -> Tuple[Layer, Layer]
-    """Defines the residual block for the WaveNet TCN
-
-    Args:
-        x: The previous layer in the model
-        dilation_rate: The dilation power of 2 we are using for this residual block
-        nb_filters: The number of convolutional filters to use in this block
-        kernel_size: The size of the convolutional kernel
-        padding: The padding used in the convolutional layers, 'same' or 'causal'.
-        dropout_rate: Float between 0 and 1. Fraction of the input units to drop.
-
-    Returns:
-        A tuple where the first element is the residual model layer, and the second
-        is the skip connection.
-    """
-    prev_x = x
-    for k in range(2):
-        x = Conv1D(filters=nb_filters,
-                   kernel_size=kernel_size,
-                   dilation_rate=dilation_rate,
-                   padding=padding)(x)
-        # x = BatchNormalization()(x)  # TODO should be WeightNorm here.
-        x = Activation('relu')(x)
-        x = SpatialDropout1D(rate=dropout_rate)(x)
-
-    # 1x1 conv to match the shapes (channel dimension).
-    prev_x = Conv1D(nb_filters, 1, padding='same')(prev_x)
-    res_x = keras.layers.add([prev_x, x])
-    return res_x, x
-
-
-def process_dilations(dilations):
-    def is_power_of_two(num):
-        return num != 0 and ((num & (num - 1)) == 0)
-
-    if all([is_power_of_two(i) for i in dilations]):
-        return dilations
-
+def video_prep_raw_data(data):
+    if run_config['use_time_series']:
+        return reverse_pos_pipeline(scaler.inverse_transform(data[:, -1, :]).reshape(-1, 15, 2))
     else:
-        new_dilations = [2 ** i for i in dilations]
-        # print(f'Updated dilations from {dilations} to {new_dilations} because of backwards compatibility.')
-        return new_dilations
+        return reverse_pos_pipeline(scaler.inverse_transform(data.reshape(-1, 30)).reshape(-1, 15, 2))
+    
+def video_prep_recon_data(input_data):
+    return reverse_pos_pipeline(scaler.inverse_transform(model(input_data).numpy()).reshape(-1, 15, 2))
 
+# <codecell>
 
-class TCN(tf.layers.Layer):
-    """Creates a TCN layer.
+p = video.comparision_video_of_reconstruction([video_prep_raw_data(_all_input_), video_prep_recon_data(_all_input_)],
+                                              images_paths_for_experiments=images_paths_for_experiments, 
+                                              n_train=len(data_train),
+                                              cluster_assignments=cluster_assignments,
+                                              as_frames=False)
 
-        Input shape:
-            A tensor of shape (batch_size, timesteps, input_dim).
+display_video(p)
 
-        Args:
-            nb_filters: The number of filters to use in the convolutional layers.
-            kernel_size: The size of the kernel to use in each convolutional layer.
-            dilations: The list of the dilations. Example is: [1, 2, 4, 8, 16, 32, 64].
-            nb_stacks : The number of stacks of residual blocks to use.
-            padding: The padding to use in the convolutional layers, 'causal' or 'same'.
-            use_skip_connections: Boolean. If we want to add skip connections from input to each residual block.
-            return_sequences: Boolean. Whether to return the last output in the output sequence, or the full sequence.
-            dropout_rate: Float between 0 and 1. Fraction of the input units to drop.
-            name: Name of the model. Useful when having multiple TCN.
+# <codecell>
 
-        Returns:
-            A TCN layer.
-        """
+from collections import OrderedDict
+_N_CLUSTER_TO_VIZ_ = 10
+_positional_data = [video_prep_raw_data(_all_input_), video_prep_recon_data(_all_input_)]
+_t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
+_t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
 
-    def __init__(self,
-                 nb_filters=64,
-                 kernel_size=2,
-                 nb_stacks=1,
-                 dilations=[1, 2, 4, 8, 16, 32],
-                 padding='causal',
-                 use_skip_connections=True,
-                 dropout_rate=0.0,
-                 return_sequences=False,
-                 name='tcn'):
-        self.name = name
-        self.return_sequences = return_sequences
-        self.dropout_rate = dropout_rate
-        self.use_skip_connections = use_skip_connections
-        self.dilations = dilations
-        self.nb_stacks = nb_stacks
-        self.kernel_size = kernel_size
-        self.nb_filters = nb_filters
-        self.padding = padding
+cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
 
-        if padding != 'causal' and padding != 'same':
-            raise ValueError("Only 'causal' or 'same' padding are compatible for this layer.")
+cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data,
+                                                                      cluster_assignments=cluster_assignments,
+                                                                      images_paths_for_experiments=images_paths_for_experiments,
+                                                                      n_train=data_train.shape[0],
+                                                                      cluster_colors=cluster_colors,
+                                                                      cluster_id_to_visualize=p[1]))
+                    for p in _t[:_N_CLUSTER_TO_VIZ_])
 
+print('cluster_vids: ', cluster_vids.keys())
 
-    def __call__(self, inputs):
-        x = inputs
-        # 1D FCN.
-        x = Convolution1D(self.nb_filters, 1, padding=self.padding)(x)
-        skip_connections = []
-        for s in range(self.nb_stacks):
-            for d in self.dilations:
-                x, skip_out = residual_block(x,
-                                             dilation_rate=d,
-                                             nb_filters=self.nb_filters,
-                                             kernel_size=self.kernel_size,
-                                             padding=self.padding,
-                                             dropout_rate=self.dropout_rate)
-                skip_connections.append(skip_out)
-        if self.use_skip_connections:
-            x = keras.layers.add(skip_connections)
-        if not self.return_sequences:
-            x = Lambda(lambda tt: tt[:, -1, :])(x)
-        return x
+# <codecell>
+
+display_video(list(cluster_vids.values())[0])

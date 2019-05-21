@@ -183,17 +183,15 @@ def plot_tnse(X, y, title='t-SNE'):
 def plot_2d_distribution(X_train, X_test, n_legs=3):
     fig, ax = plt.subplots(nrows=n_legs, ncols=2, figsize=(10, 8))
 
-    for leg_idx in range(len(ax)):
+    for leg_idx in range(n_legs):
         for j in range(5 * 2):
             cur_col = leg_idx * 10 + j
             sns.distplot(X_train[:, cur_col],
                          ax=ax[leg_idx][0],
-                         bins=50,
-                         label=f"col {cur_col}")
+                         bins=50)
             sns.distplot(X_test[:, cur_col],
                          ax=ax[leg_idx][1],
-                         bins=50,
-                         label=f"col {cur_col}")
+                         bins=50)
 
     ax[0][0].set_title('training data')
     ax[0][1].set_title('testing data')
@@ -203,3 +201,5 @@ def plot_2d_distribution(X_train, X_test, n_legs=3):
     plt.subplots_adjust(top=0.97) # necessary for the title not to be in the first plot
 
     return fig
+
+
