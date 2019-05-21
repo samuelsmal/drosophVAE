@@ -1,8 +1,9 @@
 from collections import namedtuple
 from enum import Enum
-
 from functional import seq
+import numpy as np
 
+from som_vae.settings import skeleton
 
 class _BehaviorLabel_(Enum):
     WALK_FORW = 0
@@ -40,6 +41,40 @@ def filter_by_study_and_fly(study_id, fly_id, labelled_data):
     return seq(labelled_data)\
         .filter(lambda x: x.study_id == study_id and x.fly_id == fly_id)\
         .to_list()
+
+def angle_three_points(a, b, c):
+    """
+    Given a set of any 3 points, (a,b,c), returns the angle ba^bc.
+    """
+    ba = a - b
+    bc = c - b
+ 
+    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    angle = np.arccos(cosine_angle)
+    return angle
+
+
+def convert_3d_to_angle(data):
+    data_angle = np.zeros((data.shape[0], data.shape[1]), dtype=np.float32)
+    joint_blacklist = [skeleton.is_body_coxa,
+                       skeleton.is_tarsus_tip,
+                       skeleton.is_stripe,
+                       skeleton.is_antenna]
+
+    for img_id in range(data.shape[0]):
+        for j_id in range(1, data.shape[1]-1):
+            if any([fn(j_id) for fn in joint_blacklist]):
+                continue
+            data_angle[img_id, j_id] = angle_three_points(
+                data[img_id, j_id - 1, :],
+                data[img_id, j_id, :],
+                data[img_id, j_id + 1, :])
+
+    data_angle[np.isnan(data_angle) | np.isinf(data_angle)] = 0
+    return data_angle
+
+def get_3d_columns_names(selected_columns):
+    return np.array([f"limb: {skeleton.limb_id[i]}: {p.name}" for i, p in enumerate(skeleton.tracked_points)])[selected_columns]
 
 
 __LABELLED_DATA_RAW__ = [

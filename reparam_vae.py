@@ -5,23 +5,36 @@
 
 # # VAE using the reparametrization trick
 
+# <markdowncell>
+
+# ## Constants
+
 # <codecell>
+
+_DATA_TYPE_3D_ANGLE_ = '3d_angle'
+_DATA_TYPE_2D_POS_ = '2d_pos'
+_SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 run_config = {
     'debug': False,   # general flag for debug mode
     'd_zero_data': True,    # basically a debug mode in order to overfit the model on the most simple data
-    'd_no_compression': True,  # if true, the latent_space will be the same dimension as the input. basically the model needs to learn the identity function
+    'd_no_compression': False,  # if true, the latent_space will be the same dimension as the input. basically the model needs to learn the identity function
     'use_all_experiments': False,
     'use_time_series': True,  # TODO make the time series also work on 2d data 
-    'use_2d_data': True,
+    'data_type': '3d_angle',
     'time_series_length': 10,
     'batch_size': 100
 }
 
+if run_config['use_all_experiments']:
+    run_config['batch_size'] = 1000
+
+if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
+    raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
+
 # <codecell>
 
-# to generate gifs
-#!pip install imageio
+_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom']
 
 # <markdowncell>
 
@@ -53,12 +66,18 @@ import imageio
 from IPython import display
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.manifold import TSNE
+from functional import seq
+from pathlib import Path
+from functools import reduce
+
+from importlib import reload # for debugging and developing, optional
 
 from som_vae import settings
 from som_vae import preprocessing
 from som_vae.helpers.misc import extract_args, chunks, foldl
 from som_vae.helpers.jupyter import fix_layout, display_video
 from som_vae.settings import config, skeleton
+from som_vae.settings import data as SD
 from som_vae.helpers import video, plots, misc, jupyter
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
@@ -76,22 +95,11 @@ tf.keras.backend.set_session(sess)
 
 # <markdowncell>
 
-# ## Loading of 2d data
+# ## Loading of 2d positional data
 
 # <codecell>
 
 !ls $config.__EXPERIMENT_ROOT__
-
-# <codecell>
-
-from functional import seq
-from pathlib import Path
-from functools import reduce
-
-# <codecell>
-
-from som_vae.settings import data as SD
-from importlib import reload
 
 # <codecell>
 
@@ -105,60 +113,115 @@ def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
 
 # <codecell>
 
-if run_config['use_all_experiments']:
-    raise NotImplementedError
-    all_experiments = experiments_from_root()
-    print(len(all_experiments))
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    if run_config['use_all_experiments']:
+        all_experiments = experiments_from_root()
+        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments)
 
-    pos_data = preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)
+        # TODO do the other objects as well
+    else:
+        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
-    norm_pos_data, norm_pos_data_params = zip(*[preprocessing.normalize(p) for p in pos_data])
-    experiment_lengths = [len(p) for p in norm_pos_data] # for applying the right normalization factors
-    norm_pos_data = np.vstack(norm_pos_data)
+        frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
 
-    print(f"in total we have {len(all_experiments)} experiments, but only {len(experiment_lengths)} are usable right now")
+        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+                                               .to_list()
 
-    norm_pos_data_embedded = TSNE(n_components=2, random_state=42).fit_transform(norm_pos_data[:, :, :2].reshape(norm_pos_data.shape[0], -1))
+        frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
 
-    #_cs = sns.color_palette(n_colors=len(seen_labels))
+        # TODO form a wrapper around them
+        joint_positions = joint_positions[frames_of_interest]
+        frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
+        images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
+
+# <markdowncell>
+
+# ## loading of angle-data
+
+# <codecell>
+
+if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_experiments']:
+    data_angle = np.vstack(seq(settings.data.EXPERIMENTS).map(lambda x: settings.config.positional_data(x, dimensions='3d')))
+
     #
-    #fig = plt.figure(figsize=(10, 10))
-    #_all_frames_ = pd.concat((training_frames, testing_frames))
+    # Using man-made selection (from Semigh)
     #
-    #behaviour_colours = dict(zip(seen_labels, _cs))
-    #
-    #for l, c in behaviour_colours.items():
-    #    _d = X_embedded[_all_frames_['label'] == l]
-    #    # c=[c] since matplotlib asks for it
-    #    plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
-    #    
-    #plt.legend()
-    #plt.title('simple t-SNE on latent space')
-    #fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+    data_angle = SD.convert_3d_to_angle(data_angle)
+    data_angle_cols_of_interest = [2,7,12, 19+2, 19+4, 19+12]
+    data_angle_raw = data_angle.copy()
+    data_angle = data_angle[:, data_angle_cols_of_interest][frames_of_interest]
 
-    _cs = sns.color_palette(n_colors=len(experiment_lengths))
+    angled_data_columns = SD.get_3d_columns_names(data_angle_cols_of_interest)
 
-
-    used_until = 0
-    for i, l in enumerate(experiment_lengths):
-        plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
-        used_until += l
-
-else:
-    joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
-
-    frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
-
-    images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
-                                           .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
-                                           .to_list()
+    plots.plot_angle_columns(data_angle, angled_data_columns);
     
-    frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
+    # But not all of this data has information in it (measured by variance),
+    # so we use a different selection
+
+    #
+    # column selection 
+    #
+    threshold = 0
+    selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
     
-    # TODO form a wrapper around them
-    joint_positions = joint_positions[frames_of_interest]
-    frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
-    images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
+    angled_data_columns = get_3d_columns_names(selected_cols)
+    f = plots.plot_angle_columns(data_angle_raw[:, selected_cols], angled_data_columns)
+    f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
+    plt.subplots_adjust(top=0.97)
+
+    joint_positions, normalisation_factors = preprocessing.normalize(data_angle[frames_of_interest])
+
+# <codecell>
+
+if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_experiments']:
+    all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_]
+    angle_data = [SD.convert_3d_to_angle(d) for d in preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)]
+
+    plots.plot_distribution_of_angle_data(angle_data);
+
+    angle_data = np.vstack(angle_data)
+    selected_columns = np.where(np.var(angle_data, axis=0) > 0.0)[0]
+    joint_positions = angle_data_all[:, selected_columns]
+
+# <codecell>
+
+#all_experiments = experiments_from_root()
+#print(len(all_experiments))
+#
+#pos_data = preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)
+#
+#norm_pos_data, norm_pos_data_params = zip(*[preprocessing.normalize(p) for p in pos_data])
+#experiment_lengths = [len(p) for p in norm_pos_data] # for applying the right normalization factors
+#norm_pos_data = np.vstack(norm_pos_data)
+#
+#print(f"in total we have {len(all_experiments)} experiments, but only {len(experiment_lengths)} are usable right now")
+#
+#norm_pos_data_embedded = TSNE(n_components=2, random_state=42).fit_transform(norm_pos_data[:, :, :2].reshape(norm_pos_data.shape[0], -1))
+#
+##_cs = sns.color_palette(n_colors=len(seen_labels))
+##
+##fig = plt.figure(figsize=(10, 10))
+##_all_frames_ = pd.concat((training_frames, testing_frames))
+##
+##behaviour_colours = dict(zip(seen_labels, _cs))
+##
+##for l, c in behaviour_colours.items():
+##    _d = X_embedded[_all_frames_['label'] == l]
+##    # c=[c] since matplotlib asks for it
+##    plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
+##    
+##plt.legend()
+##plt.title('simple t-SNE on latent space')
+##fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+#
+#_cs = sns.color_palette(n_colors=len(experiment_lengths))
+#
+#
+#used_until = 0
+#for i, l in enumerate(experiment_lengths):
+#    plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
+#    used_until += l
 
 # <markdowncell>
 
@@ -166,35 +229,50 @@ else:
 
 # <codecell>
 
-def to_time_series(data, sequence_length):
-    for i in range(len(data)):
-        if i + sequence_length <= len(data):
-            yield data[i:i+sequence_length]
+reshaped_joint_position.shape
 
 # <codecell>
 
-#scaler = StandardScaler()
+# scaling the data to be in [0, 1]
+# this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
 scaler = MinMaxScaler()
 
-# flatten the data
+#
+# reshapping the data 
+#
+
 if run_config['use_time_series']:
-    # TODO the scaling should be learned on the training data only
-    warnings.warn('this is not proper, fix the standardisation here')
-    reshaped_joint_position = scaler.fit_transform(joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32))
-    reshaped_joint_position = np.array(list(to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
+    # TODO the scaling should be learned on the training data only, but this is a bit tricky due to how we do the time-sequences
+    # TODO right now the training and testing data are just concatenated time-sequences, experiment overlapping. which is bad.
+    warnings.warn('this is not proper, fix the bugs here')
+    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+        reshaped_joint_position = scaler.fit_transform(joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32))
+    else:
+        reshaped_joint_position = scaler.fit_transform(joint_positions)
+    reshaped_joint_position = np.array(list(misc.to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
 else:
-    reshaped_joint_position = joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32)
+    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+        reshaped_joint_position = joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32)
 
+#
+# debugging overwrite
+#
+    
 if run_config['debug'] and run_config['d_zero_data']:
-    reshaped_joint_position = scaler.fit_transform(np.zeros_like(reshaped_joint_position))
+    # resetting the scaler to make our life easier down below the pipeline
+    reshaped_joint_position = scaler.fit_transform(np.zeros_like(joint_positions))
+    
+    if run_config['use_time_series']:
+        reshaped_joint_position = np.array(list(misc.to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
 
-# scaling the data to be in [0, 1]
-# this is due to the sigmoid activation function in the reconstruction
-#scaler = MinMaxScaler()
+#
+# split and apply scaler
+#
 
-print(f"total number of input data:{reshaped_joint_position.shape}")
-
-n_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
+if reshaped_joint_position.shape[0] > 10**5:
+    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.9)
+else:
+    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
 
 if run_config['use_time_series']:
     data_train = reshaped_joint_position[:n_of_data_points]
@@ -204,15 +282,29 @@ else:
     data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
     data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
     display.display(pd.DataFrame(data_train).describe())
+    
+print(f"shapes for train/test: {data_train[:, -1, :].shape}, {data_test[:, -1, :].shape}")
 
 # <codecell>
 
-data_train.shape
-
-# <codecell>
-
+#
+# Making sure that the distributions are not too different from each other
+#
 if run_config['use_time_series']:
-    plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :])
+    if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
+        fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(10, 6))
+
+        for c in range(data_train.shape[2]):
+            sns.distplot(data_train[:, -1, c],ax=axs[c // 3][0])
+            sns.distplot(data_test[:, -1, c], ax=axs[c // 3][1])
+
+        plt.suptitle('distribution of train and test data')
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9)
+        axs[0][0].set_title('train')
+        axs[0][1].set_title('test');
+    else:
+        plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :])
 else:
     plots.plot_2d_distribution(data_train, data_test);
 
@@ -274,24 +366,29 @@ plt.legend()
 # <codecell>
 
 # Source: https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7
+# See also:
+#   - https://stackoverflow.com/questions/46503816/keras-conv1d-layer-parameters-filters-and-kernel-size (refresher on conv layers)
+#   - https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d (refresher on conv layers)
+#   - https://jeddy92.github.io/JEddy92.github.io/ts_seq2seq_conv/ (for a good overview over diluted causal convolutions)
+#   - https://blog.goodaudience.com/introduction-to-1d-convolutional-neural-networks-in-keras-for-time-sequences-3a7ff801a2cf?gi=c5cb3c007035 (general reference)
 
 class TemporalBlock(tfkl.Layer):
-    def __init__(self, n_outputs, kernel_size, dilation_rate, dropout=0.2, trainable=True, name=None, dtype=None, activity_regularizer=None, **kwargs):
+    def __init__(self, filter_size, kernel_size, dilation_rate, dropout=0.2, trainable=True, name=None, dtype=None, activity_regularizer=None, **kwargs):
         """
         In the dilated convolution, the kernel only touches the signal at every lth entry 
-        See https://www.inference.vc/dilated-convolutions-and-kronecker-factorisation/
+        See https://www.inference.vc/dilated-convolutions-and-kronecker-factorisation/ (some bugs fixed and code adapted to our use case)
         """
         super(TemporalBlock, self).__init__(
             trainable=trainable, dtype=dtype,
             activity_regularizer=activity_regularizer,
             name=name, **kwargs)        
         self.dropout = dropout
-        self.n_outputs = n_outputs
+        self.filter_size = filter_size
         causal_conv_args = {"padding": "causal",
                             "dilation_rate": dilation_rate, 
                             "activation": tf.nn.relu}
-        self.conv1 = tfkl.Conv1D(n_outputs, kernel_size, **causal_conv_args, name="conv1")
-        self.conv2 = tfkl.Conv1D(n_outputs, kernel_size, **causal_conv_args, name="conv2")
+        self.conv1 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv1")
+        self.conv2 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv2")
         self.down_sample = None
 
     
@@ -300,27 +397,25 @@ class TemporalBlock(tfkl.Layer):
         # SpatialDropout1D proved to be much better. Original paper: https://arxiv.org/abs/1411.4280
         self.dropout1 = tfkl.SpatialDropout1D(self.dropout)
         self.dropout2 = tfkl.SpatialDropout1D(self.dropout)
-        if input_shape[channel_dim] != self.n_outputs:
+        if input_shape[channel_dim] != self.filter_size:
             # TODO why not a conv1d layer?
             # self.down_sample = tf.layers.Conv1D(
-            #     self.n_outputs, kernel_size=1, 
+            #     self.filter_size, kernel_size=1, 
             #     activation=None, data_format="channels_last", padding="valid")
-            self.down_sample = tf.layers.Dense(self.n_outputs, activation=None)
+            self.down_sample = tf.layers.Dense(self.filter_size, activation=None)
         self.built = True
     
     def call(self, inputs, training=True):
         x = self.conv1(inputs)
-        x = tf.contrib.layers.layer_norm(x)
         x = self.dropout1(x, training=training)
         x = self.conv2(x)
-        x = tf.contrib.layers.layer_norm(x)
         x = self.dropout2(x, training=training)
         if self.down_sample is not None:
             inputs = self.down_sample(inputs)
         return tf.nn.relu(x + inputs)
 
 class TemporalConvNet(tfkl.Layer):
-    def __init__(self, num_channels, kernel_size=3, dropout=0.2,
+    def __init__(self, filter_sizes, kernel_size=3, dropout=0.2,
                  trainable=True, name=None, dtype=None, 
                  activity_regularizer=None, **kwargs):
         super(TemporalConvNet, self).__init__(
@@ -330,12 +425,12 @@ class TemporalConvNet(tfkl.Layer):
         )
         
         # TODO why not use a sequential layer here?
-        self.layers = [TemporalBlock(n_out_channels, 
+        self.layers = [TemporalBlock(filter_size, 
                                      kernel_size,
                                      dilation_rate=2 ** i,
                                      dropout=dropout,
                                      name=f"temporal_block_{i}") 
-                       for i, n_out_channels in enumerate(num_channels)]
+                       for i, filter_size in enumerate(filter_sizes)]
     
     def call(self, inputs, training=True):
         outputs = inputs
@@ -359,7 +454,8 @@ def dense_layers(sizes, activation_fn=tf.nn.leaky_relu):
 
 
 class R_VAE(tf.keras.Model):
-    def __init__(self, latent_dim, input_shape, batch_size, n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0):
+    def __init__(self, latent_dim, input_shape, batch_size, 
+                 n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, filters_conv_layer=None):
         """
         Args:
         -----
@@ -370,6 +466,7 @@ class R_VAE(tf.keras.Model):
         n_layers                int, number of dense layers. 
                                 output shape of the dense layers is linearly scaled.
         dropout_rate_temporal   float, in [0, 1). dropout rate for temporal blocks (conv layers).
+        filters_conv_layer      list[int]. filter sizes for conv layers
         """
         super(R_VAE, self).__init__()
         self.latent_dim = latent_dim
@@ -393,7 +490,13 @@ class R_VAE(tf.keras.Model):
         if len(input_shape) == 1:
             self.temporal_conv_net = None
         elif len(input_shape) == 2:
-            self.temporal_conv_net = TemporalConvNet(num_channels=[input_shape[-1]] * 3,  
+            # Remember that we do diluted convolutions -> The filter size can stay ~ constant. TODO discuss with Semigh
+            if filters_conv_layer is None:
+                # TODO this is probably not correct
+                self.filters_conv_layer = [input_shape[-1]] * 3
+            else:
+                self.filters_conv_layer = filters_conv_layer
+            self.temporal_conv_net = TemporalConvNet(filter_sizes=self.filters_conv_layer,  
                                                      dropout=dropout_rate_temporal,
                                                      name='temporal_conv_net')
         else:
@@ -403,12 +506,16 @@ class R_VAE(tf.keras.Model):
     
     def sample(self, eps=None):
         if eps is None:
+            if self._loss_weight_kl == 0.0:
+                warnings.warn('KL loss is 0.0. The latent space is not properly trained')
+            # The KL-loss is calculated against a normal distribution, 
+            # thus it should resemble one and thus sampling should make sense.
             eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
         return self.decode(eps, apply_sigmoid=True)
   
     def encode(self, x, training=False):
         if self.temporal_conv_net:
-            # taking only the last entry
+            # TODO combine them into one? max pooling or something
             x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
             mean, logvar = tf.split(self.inference_net(x_tmp), num_or_size_splits=2, axis=1)
         else:
@@ -416,6 +523,7 @@ class R_VAE(tf.keras.Model):
         return mean, logvar
   
     def reparameterize(self, mean, logvar):
+        # TODO check: the params should be correct? check original paper
         eps = tf.random_normal(shape=mean.shape)
         return eps * tf.exp(logvar * .5) + mean
   
@@ -451,6 +559,14 @@ class R_VAE(tf.keras.Model):
 
 # ## Define the loss function and the optimizer
 # 
+
+
+# <markdowncell>
+
+# ### Doc
+
+# <markdowncell>
+
 # VAEs train by maximizing the evidence lower bound (ELBO) on the marginal log-likelihood:
 # 
 # $$\log p(x) \ge \text{ELBO} = \mathbb{E}_{q(z|x)}\left[\log \frac{p(x, z)}{q(z|x)}\right].$$
@@ -461,6 +577,10 @@ class R_VAE(tf.keras.Model):
 # where $z$ is sampled from $q(z|x)$.
 # 
 # **Note**: we could also analytically compute the KL term, but here we incorporate all three terms in the Monte Carlo estimator for simplicity.
+
+# <markdowncell>
+
+# ### Code
 
 # <codecell>
 
@@ -525,7 +645,7 @@ def get_config_hash(config, digest_length=5):
 if run_config['debug'] and run_config['d_no_compression']:
     latent_dim=data_train.shape[-1]
 else:
-    latent_dim = 8
+    latent_dim = 2
 
 tf.reset_default_graph()
 test_losses = []
@@ -550,9 +670,6 @@ test_log_dir = _base_path_ + '/test'
 train_summary_writer = tfc.summary.create_file_writer(train_log_dir)
 test_summary_writer = tfc.summary.create_file_writer(test_log_dir)
 
-global_step = tf.train.get_or_create_global_step()
-
-
 # <codecell>
 
 # This is the run cell. Designed to be able to train the model for an arbitrary amount of epochs.
@@ -568,26 +685,34 @@ print(f"will train model {model._config_()}, with global params: {run_config}, h
 print(f"will train for ever...")
 epoch = len(train_losses)
 while True:
-    start_time = time.time()
-    for train_x in train_dataset:
-        gradients, loss = compute_gradients(model, train_x)
-        apply_gradients(optimizer, gradients, model.trainable_variables)
-    end_time = time.time()
-        
-    test_losses += [_compute_loss_for_data_(model, test_dataset)]
-    train_losses += [_compute_loss_for_data_(model, train_dataset)]
-    
-    with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-        tfc.summary.scalar('loss', train_losses[-1], step=epoch)
-  
-    with test_summary_writer.as_default(), tfc.summary.always_record_summaries():
-        tfc.summary.scalar('loss', test_losses[-1], step=epoch)
-    
-    if epoch % 10 == 0:
-        print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
+    try:
+        start_time = time.time()
+        for train_x in train_dataset:
+            gradients, loss = compute_gradients(model, train_x)
+            apply_gradients(optimizer, gradients, model.trainable_variables)
+        end_time = time.time()
+
+        test_losses += [_compute_loss_for_data_(model, test_dataset)]
+        train_losses += [_compute_loss_for_data_(model, train_dataset)]
+
+        with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
+            tfc.summary.scalar('loss', train_losses[-1], step=epoch)
+
+        with test_summary_writer.as_default(), tfc.summary.always_record_summaries():
+            tfc.summary.scalar('loss', test_losses[-1], step=epoch)
+
+        if epoch % 10 == 0:
+            print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
+            tfc.summary.flush()
+        else:
+            # simple "loading bar"
+            print('.' * (epoch % 10), end='\r')
+
+        epoch += 1
+    except KeyboardInterrupt:
         tfc.summary.flush()
-        
-    epoch += 1
+        print(f"Stopped training during epoch {epoch + 1}, current loss: {train_losses[-1]:0.3f}/{test_losses[-1]:0.3f}")
+        break
 
 # <codecell>
 
@@ -632,47 +757,59 @@ plt.xlabel('epochs')
 plt.ylabel('loss (ELBO)')
 plt.legend()
 
+# <markdowncell>
+
+# # evaluation
+
 # <codecell>
 
-def _reverse_to_original_shape_(pos_data, input_shape=None):
-    input_shape = (15, -1)
+def _reverse_to_original_shape_(pos_data):
+    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+        input_shape = (15, -1)
+    else:
+        input_shape = (9, -1)
         
     return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
 # <codecell>
 
-gen_pos_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(11)]))
+input_data_raw = np.vstack((data_train, data_test))
 
-if run_config['use_time_series']: 
-    plots.plot_comparing_joint_position_with_reconstructed(_reverse_to_original_shape_(data_train[:, -1, :]), 
-                                                           gen_pos_data[:data_train.shape[0]],
-                                                           validation_cut_off=data_train.shape[0])
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    input_data = _reverse_to_original_shape_(input_data_raw)
 else:
-    plots.plot_comparing_joint_position_with_reconstructed(_reverse_to_original_shape_(data_train), 
-                                                           gen_pos_data[:data_train.shape[0]],
-                                                           validation_cut_off=data_train.shape[0])
+    input_data = _reverse_to_original_shape_(input_data_raw[:, -1, :])
+    
+reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=True).numpy())
+_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
+generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))
 
 # <codecell>
 
-pred_train = model.predict(data_train).numpy()
-pred_train_rev = _reverse_to_original_shape_(model.predict(data_train).numpy())
-
-if run_config['use_time_series']: 
-    plots.plot_comparing_joint_position_with_reconstructed(_reverse_to_original_shape_(data_train[:, -1, :]),
-                                                           pred_train_rev,
-                                                           validation_cut_off=data_train.shape[0])
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    #plots.plot_comparing_joint_position_with_reconstructed(input_data, generated_data, validation_cut_off=len(input_data))
+    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train))
 else:
-    plots.plot_comparing_joint_position_with_reconstructed(_reverse_to_original_shape_(data_train), 
-                                                           pred_train_rev,
-                                                           validation_cut_off=data_train.shape[0])
+    fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(20, 10), sharex=True, sharey=True)
+    for i, c in enumerate(selected_cols):
+        axs[i][0].plot(input_data[:, i])
+        axs[i][1].plot(generated_data[:, i])
+        axs[i][2].plot(reconstructed_data[:, i])
+        
+        for a in axs[i]:
+            a.axvline(len(data_train), label='validation cut off', linestyle='--')
+
+    axs[0][0].set_title('input')
+    axs[0][1].set_title('generated')
+    axs[0][2].set_title('reconstructed')
+
+# <codecell>
+
+np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(reconstructed_data, axis=1)))
 
 # <markdowncell>
 
 # # Latent space
-
-# <codecell>
-
-_all_input_ = np.vstack((data_train, data_test))
 
 # <codecell>
 
@@ -685,7 +822,7 @@ from sklearn.manifold import TSNE
 
 LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
-X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(_all_input_)))
+X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
 cluster_assignments = HDBSCAN(min_cluster_size=4).fit_predict(np.hstack((X_latent.mean, X_latent.var)))

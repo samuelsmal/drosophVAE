@@ -203,3 +203,25 @@ def plot_2d_distribution(X_train, X_test, n_legs=3):
     return fig
 
 
+def plot_distribution_of_angle_data(data):
+    from som_vae.settings.data import get_3d_columns_names
+    """
+    data is should be a list of lists (on list for each experiment)
+    """
+    # This will take some time... you can set `sharey=False` to speed it up.
+    fig, axs = plt.subplots(nrows=len(data), ncols=3, figsize=(20, len(data) // 2))
+
+    for i, data_set in enumerate(data):
+        selected_cols =  np.where(np.var(data_set, axis=0) > 0.0)[0]
+        column_names = get_3d_columns_names(selected_cols)
+
+        for s, cn in zip(selected_cols, column_names):
+            sns.distplot(data_set[:, s], label=cn, ax=axs[i][int(cn[len('limb: '):len('limb: 0')])])
+
+
+    plt.suptitle('distribution of angled data')
+    plt.subplots_adjust(top=0.96)
+    for i, ax in enumerate(axs[0]):
+        ax.set_title(f"limb {i}")
+
+    return fig
