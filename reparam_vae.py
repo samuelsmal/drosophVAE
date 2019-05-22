@@ -11,46 +11,43 @@
 
 # <codecell>
 
+!ls $config.__EXPERIMENT_ROOT__
+
+# <codecell>
+
+_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
+
 _DATA_TYPE_3D_ANGLE_ = '3d_angle'
 _DATA_TYPE_2D_POS_ = '2d_pos'
 _SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 run_config = {
-    'debug': True,   # general flag for debug mode
-    'd_zero_data': False,    # basically a debug mode in order to overfit the model on the most simple data
-    'd_no_compression': False,  # if true, the latent_space will be the same dimension as the input. basically the model needs to learn the identity function
-    'd_sinoid_data': True,
+    'debug': False,                # general flag for debug mode, triggers all `d_.*`-options.
+    'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
+    'd_sinoid_data': True, 
+    'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
     'use_all_experiments': False,
-    'use_time_series': True,  # TODO make the time series also work on 2d data 
     'data_type': '3d_angle',
-    'time_series_length': 10,
+    'use_time_series': False,       # triggers time series application, without this the model is only dense layers
+    'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
+    'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
+    'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
+    'latent_dim': 2,               # should be adapted given the input dim
     'batch_size': 100
 }
 
 if run_config['use_all_experiments']:
+    # takes way too long otherwise
     run_config['batch_size'] = 1000
 
 if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
     raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
-
-# <codecell>
-
-_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom']
 
 # <markdowncell>
 
 # ## Import TensorFlow and enable Eager execution
 
 # <codecell>
-
-# Import TensorFlow >= 1.9 and enable eager execution
-import tensorflow as tf
-tfe = tf.contrib.eager
-tfc = tf.contrib
-tf.enable_eager_execution()
-
-tfk = tf.keras
-tfkl = tf.keras.layers
 
 import json
 from collections import namedtuple
@@ -73,6 +70,18 @@ from functools import reduce
 
 from importlib import reload # for debugging and developing, optional
 
+import tensorflow as tf
+tfe = tf.contrib.eager
+tfc = tf.contrib
+tf.enable_eager_execution()
+
+tfk = tf.keras
+tfkl = tf.keras.layers
+
+from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
+tf.keras.backend.set_session(sess)
+
 from som_vae import settings
 from som_vae import preprocessing
 from som_vae.helpers.misc import extract_args, chunks, foldl
@@ -82,25 +91,14 @@ from som_vae.settings import data as SD
 from som_vae.helpers import video, plots, misc, jupyter
 from som_vae import preprocessing
 from som_vae.helpers.logging import enable_logging
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <codecell>
 
 jupyter.fix_layout()
 
-# <codecell>
-
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
-sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
-tf.keras.backend.set_session(sess)
-
 # <markdowncell>
 
 # ## Loading of 2d positional data
-
-# <codecell>
-
-!ls $config.__EXPERIMENT_ROOT__
 
 # <codecell>
 
@@ -237,6 +235,16 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
 # <codecell>
 
+reshaped_joint_position.shape
+
+# <codecell>
+
+def _to_time_series_(x):
+    return np.array(list(misc.to_time_series(x, sequence_length=run_config['time_series_length'])))
+
+def _prep_2d_pos_data_(x):
+    return x[:,:,:2].reshape(x.shape[0], -1).astype(np.float32)
+
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
 scaler = MinMaxScaler()
@@ -245,18 +253,25 @@ scaler = MinMaxScaler()
 # reshapping the data 
 #
 
+# TODO bring this in order!
+
 if run_config['use_time_series']:
+    # it's the shitty logical combination of these values
     # TODO the scaling should be learned on the training data only, but this is a bit tricky due to how we do the time-sequences
     # TODO right now the training and testing data are just concatenated time-sequences, experiment overlapping. which is bad.
     warnings.warn('this is not proper, fix the bugs here')
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        reshaped_joint_position = scaler.fit_transform(joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32))
+        reshaped_joint_position = scaler.fit_transform(_prep_2d_pos_data_(joint_positions))
     else:
         reshaped_joint_position = scaler.fit_transform(joint_positions)
-    reshaped_joint_position = np.array(list(misc.to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
+        
+    reshaped_joint_position = _to_time_series_(reshaped_joint_position)
 else:
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        reshaped_joint_position = joint_positions[:,:,:2].reshape(joint_positions.shape[0], -1).astype(np.float32)
+        # angle data is already flat
+        reshaped_joint_position = _prep_2d_pos_data_(joint_positions)
+    else:
+        reshaped_joint_position = joint_positions
 
 #
 # debugging overwrite
@@ -273,7 +288,7 @@ if run_config['debug']:
         reshaped_joint_position = scaler.fit_transform(_dummy_data_)
         
     if run_config['use_time_series']:
-        reshaped_joint_position = np.array(list(misc.to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
+        reshaped_joint_position = _to_time_series_(reshaped_joint_position)
 
 #
 # split and apply scaler
@@ -293,30 +308,40 @@ else:
     data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
     display.display(pd.DataFrame(data_train).describe())
     
-print(f"shapes for train/test: {data_train[:, -1, :].shape}, {data_test[:, -1, :].shape}")
+print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
 
 # <codecell>
 
 #
 # Making sure that the train/test distributions are not too different from each other
 #
-if run_config['use_time_series']:
-    if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-        fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(10, 6))
+if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
+    fig, axs = plt.subplots(nrows=data_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
+    col_names = SD.get_3d_columns_names(selected_cols)
 
-        for c in range(data_train.shape[2]):
+    for c in range(data_train.shape[-1]):
+        if run_config['use_time_series']:
             sns.distplot(data_train[:, -1, c],ax=axs[c // 3][0])
             sns.distplot(data_test[:, -1, c], ax=axs[c // 3][1])
+        else:
+            sns.distplot(data_train[:, c],ax=axs[c // 3][0])
+            sns.distplot(data_test[:, c], ax=axs[c // 3][1])
 
-        plt.suptitle('distribution of train and test data')
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.9)
-        axs[0][0].set_title('train')
-        axs[0][1].set_title('test');
-    else:
-        plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :])
+    plt.suptitle('distribution of train and test data')
+
+    for i, a in enumerate(axs):
+        a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
+
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    axs[0][0].set_title('train')
+    axs[0][1].set_title('test')
 else:
-    plots.plot_2d_distribution(data_train, data_test);
+    if run_config['use_time_series']:
+        plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :])
+    else:
+        plots.plot_2d_distribution(data_train, data_test);
 
 # <markdowncell>
 
@@ -340,9 +365,14 @@ test_dataset = to_tf_data(data_test)
 
 # <markdowncell>
 
-# ### General sources:
+# ### Sources:
 # 
-# - https://blog.keras.io/building-autoencoders-in-keras.html
+# - https://blog.keras.io/building-autoencoders-in-keras.html (keras autoencoder implementation)
+# - https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7 (temporal block)
+# - https://stackoverflow.com/questions/46503816/keras-conv1d-layer-parameters-filters-and-kernel-size (refresher on conv layers)
+# - https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d (refresher on conv layers)
+# - https://jeddy92.github.io/JEddy92.github.io/ts_seq2seq_conv/ (for a good overview over diluted causal convolutions)
+# - https://blog.goodaudience.com/introduction-to-1d-convolutional-neural-networks-in-keras-for-time-sequences-3a7ff801a2cf?gi=c5cb3c007035 (general reference)
 
 # <markdowncell>
 
@@ -367,7 +397,7 @@ test_dataset = to_tf_data(data_test)
 # <codecell>
 
 def _receptive_field_size_temporal_conv_net_(kernel_size, n_layers):
-    return (1 + 2 * (kernel_size - 1) * (2 ** n_layers - 1))
+    return 1 + 2 * (kernel_size - 1) * (2 ** n_layers - 1)
 
 for k in range(2, 5):
     plt.plot([_receptive_field_size_temporal_conv_net_(kernel_size=k, n_layers=n) for n in range(10)], label=f"kernel size: {k}")
@@ -375,18 +405,19 @@ plt.xlabel('number of layers')
 plt.ylabel('receptive field size')
 plt.legend()
 
+# <codecell>
+
+if run_config['n_conv_layers'] is None:
+    run_config['n_conv_layers'] = np.int(np.ceil(np.log2((run_config['time_series_length'] - 1) / (2 * (run_config['conv_layer_kernel_size'] - 1)) + 1)))
+
+if run_config['conv_layer_kernel_size'] is None:
+    raise NotImplementedError('ups')
+
 # <markdowncell>
 
 # ## code
 
 # <codecell>
-
-# Source: https://medium.com/the-artificial-impostor/notes-understanding-tensorflow-part-3-7f6633fcc7c7
-# See also:
-#   - https://stackoverflow.com/questions/46503816/keras-conv1d-layer-parameters-filters-and-kernel-size (refresher on conv layers)
-#   - https://towardsdatascience.com/types-of-convolutions-in-deep-learning-717013397f4d (refresher on conv layers)
-#   - https://jeddy92.github.io/JEddy92.github.io/ts_seq2seq_conv/ (for a good overview over diluted causal convolutions)
-#   - https://blog.goodaudience.com/introduction-to-1d-convolutional-neural-networks-in-keras-for-time-sequences-3a7ff801a2cf?gi=c5cb3c007035 (general reference)
 
 class TemporalBlock(tfkl.Layer):
     def __init__(self, filter_size, kernel_size, dilation_rate, dropout=0.2, trainable=True, name=None, dtype=None, activity_regularizer=None, **kwargs):
@@ -430,30 +461,6 @@ class TemporalBlock(tfkl.Layer):
             inputs = self.down_sample(inputs)
         return tf.nn.relu(x + inputs)
 
-class TemporalConvNet(tfkl.Layer):
-    def __init__(self, filter_sizes, kernel_size=2, dropout=0.2,
-                 trainable=True, name=None, dtype=None, 
-                 activity_regularizer=None, **kwargs):
-        super(TemporalConvNet, self).__init__(
-            trainable=trainable, dtype=dtype,
-            activity_regularizer=activity_regularizer,
-            name=name, **kwargs
-        )
-        
-        # TODO why not use a sequential layer here?
-        self.layers = [TemporalBlock(filter_size, 
-                                     kernel_size,
-                                     dilation_rate=2 ** i,
-                                     dropout=dropout,
-                                     name=f"temporal_block_{i}") 
-                       for i, filter_size in enumerate(filter_sizes)]
-    
-    def call(self, inputs, training=True):
-        outputs = inputs
-        for layer in self.layers:
-            outputs = layer(outputs, training=training)
-        return outputs
-
 # <codecell>
 
 # build using:
@@ -471,10 +478,12 @@ def dense_layers(sizes, activation_fn=tf.nn.leaky_relu):
     
     return [tfkl.Dense(size, activation=None if is_last else activation_fn) for is_last, size in if_last(sizes)]
 
+def temporal_layers(filter_sizes, kernel_size=2, dropout=0.2):
+    return [TemporalBlock(filter_size, kernel_size, dilation_rate=2 ** i, dropout=dropout, name=f"temporal_block_{i}") for i, filter_size in enumerate(filter_sizes)]
 
 class DrosophVAE(tf.keras.Model):
     def __init__(self, latent_dim, input_shape, batch_size, 
-                 n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, filters_conv_layer=None):
+                 n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, filters_conv_layer=None, conv_layer_kernel_size=2):
         """
         Args:
         -----
@@ -497,6 +506,7 @@ class DrosophVAE(tf.keras.Model):
         # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
         # the 2 * n_layers is to keep compression speed roughly the same
         self._layer_sizes_generative = np.linspace(latent_dim, input_shape[-1], 2 * n_layers).astype(np.int).tolist()
+        self._conv_layer_kernel_size = conv_layer_kernel_size
         
         self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape[-1]),
                                                  *dense_layers(self._layer_sizes_inference)],
@@ -515,8 +525,10 @@ class DrosophVAE(tf.keras.Model):
                 self.filters_conv_layer = [input_shape[-1]] * 3
             else:
                 self.filters_conv_layer = filters_conv_layer
-            self.temporal_conv_net = TemporalConvNet(filter_sizes=self.filters_conv_layer,  
-                                                     dropout=dropout_rate_temporal,
+            self.temporal_conv_net = tfk.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape),
+                                                     *temporal_layers(kernel_size=self._conv_layer_kernel_size, 
+                                                                      filter_sizes=self.filters_conv_layer,  
+                                                                      dropout=dropout_rate_temporal)],
                                                      name='temporal_conv_net')
         else:
             raise ValueError(f"Input shape is not good, got: {input_shape}")
@@ -625,14 +637,15 @@ def compute_loss(model, x):
     z = model.reparameterize(mean, logvar)
     x_logit = model.decode(z)
     
-    if len(x.shape) == 2:
-        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
-    else:
+    if run_config['use_time_series']:
         # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
         cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
-    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
-    
+    else:
+        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
+        
+    # TODO check this!
     # reconstruction loss
+    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
     logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
     
     # KL loss
@@ -664,9 +677,9 @@ def get_config_hash(config, digest_length=5):
 
 # This is the init cell. The model and all related objects are created here.
 if run_config['debug'] and run_config['d_no_compression']:
-    latent_dim=data_train.shape[-1]
+    latent_dim= data_train.shape[-1]
 else:
-    latent_dim = 2
+    latent_dim = run_config['latent_dim'] # 2
 
 tf.reset_default_graph()
 test_losses = []
@@ -680,6 +693,9 @@ model = DrosophVAE(latent_dim,
                    loss_weight_reconstruction=1.0,
                    loss_weight_kl=0.5)
 
+if run_config['use_time_series']:
+    model.temporal_conv_net.summary()
+    
 model.inference_net.summary()
 model.generative_net.summary()
 
@@ -737,37 +753,6 @@ while True:
 
 # <codecell>
 
-#print(f"will train model {model._config_()}, with global params: {run_config}")
-## TODO add tensorboard stuff
-#def _compute_loss_for_data_(model, data):
-#    loss = tfe.metrics.Mean()
-#    for x in data:
-#        loss(compute_loss(model, x))
-#    elbo = -loss.result()
-#    
-#    return elbo
-#
-##print(f"will train for {epochs} epochs")
-##for epoch in range(1, epochs + 1):
-#print(f"will train for ever...")
-#epoch = len(train_losses)
-#while True:
-#    start_time = time.time()
-#    for train_x in train_dataset:
-#        gradients, loss = compute_gradients(model, train_x)
-#        apply_gradients(optimizer, gradients, model.trainable_variables)
-#    end_time = time.time()
-#
-#    test_losses += [_compute_loss_for_data_(model, test_dataset)]
-#    train_losses += [_compute_loss_for_data_(model, train_dataset)]
-#
-#    if epoch % 10 == 0:
-#        print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
-#        
-#    epoch += 1
-
-# <codecell>
-
 len(train_losses)
 
 # <codecell>
@@ -788,7 +773,7 @@ def _reverse_to_original_shape_(pos_data):
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
         input_shape = (15, -1)
     else:
-        input_shape = (9, -1)
+        input_shape = pos_data.shape[1:]
         
     return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
@@ -796,12 +781,12 @@ def _reverse_to_original_shape_(pos_data):
 
 input_data_raw = np.vstack((data_train, data_test))
 
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    input_data = _reverse_to_original_shape_(input_data_raw)
-else:
+if run_config['use_time_series']:
     input_data = _reverse_to_original_shape_(input_data_raw[:, -1, :])
+else:
+    input_data = _reverse_to_original_shape_(input_data_raw)
     
-reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=True).numpy())
+reconstructed_data = _reverse_to_original_shape_(model.predict(input_data_raw).numpy())
 _min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
 generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))
 
@@ -809,13 +794,13 @@ generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() f
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     #plots.plot_comparing_joint_position_with_reconstructed(input_data, generated_data, validation_cut_off=len(input_data))
-    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train))
+    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train));
 else:
     fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
     for i, c in enumerate(selected_cols):
-        axs[i][0].plot(input_data[:1000, i])
-        axs[i][1].plot(generated_data[:1000, i])
-        axs[i][2].plot(reconstructed_data[:1000, i])
+        axs[i][0].plot(input_data[:100, i])
+        axs[i][1].plot(generated_data[:100, i])
+        axs[i][2].plot(reconstructed_data[:100, i])
         
         #for a in axs[i]:
         #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
@@ -823,6 +808,9 @@ else:
     axs[0][0].set_title('input')
     axs[0][1].set_title('generated')
     axs[0][2].set_title('reconstructed')
+    
+    #plt.tight_layout()
+    #plt.savefig(f"./figures/{_CONFIG_HASH_}_input_gen_recon_comparision.png")
 
 # <codecell>
 
@@ -846,25 +834,40 @@ from sklearn.manifold import TSNE
 LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 warnings.warn('should use all data `input_data`')
-
-X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
+if run_config['use_all_experiments']:
+    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
+else:
+    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
+    
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
 # <codecell>
 
-cluster_assignments = HDBSCAN(min_cluster_size=15).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
 
 # <codecell>
 
-plt.figure(figsize=(20, 12))
+from matplotlib import gridspec
+
+fig = plt.figure(figsize=(20, 18))
+gs = gridspec.GridSpec(3, 2, figure=fig)
+ax1 = plt.subplot(gs[:2, :])
+ax2 = plt.subplot(gs[-1:, :1])
+ax3 = plt.subplot(gs[-1:, 1:])
+
+#plt.figure(figsize=(20, 12))
+#fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
 for cluster in np.unique(cluster_assignments):
     c_idx = cluster_assignments == cluster
     c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
-    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster)
-    
+    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster, ax=ax1)
+    sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2)
+    sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3)
     
 plt.legend()
-plt.title('T-SNE proejection of latent space (mean & var stacked)');
+ax1.set_title('T-SNE proejection of latent space (mean & var stacked)')
+ax2.set_title('mean')
+ax3.set_title('var');
 
 # <markdowncell>
 
