@@ -678,7 +678,7 @@ model = DrosophVAE(latent_dim,
                    n_layers=4, 
                    dropout_rate_temporal=0.2,
                    loss_weight_reconstruction=1.0,
-                   loss_weight_kl=0.0)
+                   loss_weight_kl=0.5)
 
 model.inference_net.summary()
 model.generative_net.summary()
@@ -811,14 +811,14 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     #plots.plot_comparing_joint_position_with_reconstructed(input_data, generated_data, validation_cut_off=len(input_data))
     plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train))
 else:
-    fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(20, 10), sharex=True, sharey=True)
+    fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
     for i, c in enumerate(selected_cols):
-        axs[i][0].plot(input_data[:, i])
-        axs[i][1].plot(generated_data[:, i])
-        axs[i][2].plot(reconstructed_data[:, i])
+        axs[i][0].plot(input_data[:1000, i])
+        axs[i][1].plot(generated_data[:1000, i])
+        axs[i][2].plot(reconstructed_data[:1000, i])
         
-        for a in axs[i]:
-            a.axvline(len(data_train), label='validation cut off', linestyle='--')
+        #for a in axs[i]:
+        #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
 
     axs[0][0].set_title('input')
     axs[0][1].set_title('generated')
@@ -845,7 +845,9 @@ from sklearn.manifold import TSNE
 
 LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
-X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
+warnings.warn('should use all data `input_data`')
+
+X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
 # <codecell>
@@ -860,6 +862,8 @@ for cluster in np.unique(cluster_assignments):
     c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
     sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster)
     
+    
+plt.legend()
 plt.title('T-SNE proejection of latent space (mean & var stacked)');
 
 # <markdowncell>
