@@ -16,9 +16,10 @@ _DATA_TYPE_2D_POS_ = '2d_pos'
 _SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 run_config = {
-    'debug': False,   # general flag for debug mode
-    'd_zero_data': True,    # basically a debug mode in order to overfit the model on the most simple data
+    'debug': True,   # general flag for debug mode
+    'd_zero_data': False,    # basically a debug mode in order to overfit the model on the most simple data
     'd_no_compression': False,  # if true, the latent_space will be the same dimension as the input. basically the model needs to learn the identity function
+    'd_sinoid_data': True,
     'use_all_experiments': False,
     'use_time_series': True,  # TODO make the time series also work on 2d data 
     'data_type': '3d_angle',
@@ -113,6 +114,12 @@ def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
 
 # <codecell>
 
+if not run_config['use_all_experiments']:
+    frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
+    frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
+
+# <codecell>
+
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     if run_config['use_all_experiments']:
         all_experiments = experiments_from_root()
@@ -122,15 +129,15 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     else:
         joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
-        frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)[:len(joint_positions)]
 
         images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
                                                .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
                                                .to_list()
 
-        frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
-
         # TODO form a wrapper around them
+        warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+        frames_of_interest = frames_of_interest[:len(joint_positions)]
+        
         joint_positions = joint_positions[frames_of_interest]
         frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
         images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
@@ -147,14 +154,14 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_e
     #
     # Using man-made selection (from Semigh)
     #
-    data_angle = SD.convert_3d_to_angle(data_angle)
-    data_angle_cols_of_interest = [2,7,12, 19+2, 19+4, 19+12]
-    data_angle_raw = data_angle.copy()
-    data_angle = data_angle[:, data_angle_cols_of_interest][frames_of_interest]
-
-    angled_data_columns = SD.get_3d_columns_names(data_angle_cols_of_interest)
-
-    plots.plot_angle_columns(data_angle, angled_data_columns);
+    data_angle_raw = SD.convert_3d_to_angle(data_angle)
+    warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+    frames_of_interest = frames_of_interest[:len(data_angle_raw)]
+    
+    selected_cols = [2,7,12, 19+2, 19+4, 19+12]
+    angled_data_columns = SD.get_3d_columns_names(selected_cols)
+    # for some odd reason numpy complains with I do data_angle_raw[frames_of_interest, selected_cols]
+    #plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns);
     
     # But not all of this data has information in it (measured by variance),
     # so we use a different selection
@@ -165,12 +172,13 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_e
     threshold = 0
     selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
     
-    angled_data_columns = get_3d_columns_names(selected_cols)
-    f = plots.plot_angle_columns(data_angle_raw[:, selected_cols], angled_data_columns)
+    angled_data_columns = SD.get_3d_columns_names(selected_cols)
+    f = plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns)
     f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
     plt.subplots_adjust(top=0.97)
 
-    joint_positions, normalisation_factors = preprocessing.normalize(data_angle[frames_of_interest])
+    # TODO not so sure here, should we really normalize the data?
+    joint_positions, normalisation_factors = preprocessing.normalize(data_angle_raw[:, selected_cols][frames_of_interest])
 
 # <codecell>
 
@@ -229,10 +237,6 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
 # <codecell>
 
-reshaped_joint_position.shape
-
-# <codecell>
-
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
 scaler = MinMaxScaler()
@@ -258,10 +262,16 @@ else:
 # debugging overwrite
 #
     
-if run_config['debug'] and run_config['d_zero_data']:
-    # resetting the scaler to make our life easier down below the pipeline
-    reshaped_joint_position = scaler.fit_transform(np.zeros_like(joint_positions))
-    
+if run_config['debug']:
+    if run_config['d_zero_data']:
+        # resetting the scaler to make our life easier down below the pipeline
+        reshaped_joint_position = scaler.fit_transform(np.zeros_like(joint_positions))
+    elif run_config['d_sinoid_data']:
+        _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
+                                  for x in range(len(joint_positions))] 
+                                 for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
+        reshaped_joint_position = scaler.fit_transform(_dummy_data_)
+        
     if run_config['use_time_series']:
         reshaped_joint_position = np.array(list(misc.to_time_series(reshaped_joint_position, sequence_length=run_config['time_series_length'])))
 
@@ -288,7 +298,7 @@ print(f"shapes for train/test: {data_train[:, -1, :].shape}, {data_test[:, -1, :
 # <codecell>
 
 #
-# Making sure that the distributions are not too different from each other
+# Making sure that the train/test distributions are not too different from each other
 #
 if run_config['use_time_series']:
     if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
@@ -327,6 +337,12 @@ test_dataset = to_tf_data(data_test)
 # <markdowncell>
 
 # ## doc
+
+# <markdowncell>
+
+# ### General sources:
+# 
+# - https://blog.keras.io/building-autoencoders-in-keras.html
 
 # <markdowncell>
 
@@ -402,7 +418,7 @@ class TemporalBlock(tfkl.Layer):
             # self.down_sample = tf.layers.Conv1D(
             #     self.filter_size, kernel_size=1, 
             #     activation=None, data_format="channels_last", padding="valid")
-            self.down_sample = tf.layers.Dense(self.filter_size, activation=None)
+            self.down_sample = tfkl.Dense(self.filter_size, activation=None)
         self.built = True
     
     def call(self, inputs, training=True):
@@ -415,7 +431,7 @@ class TemporalBlock(tfkl.Layer):
         return tf.nn.relu(x + inputs)
 
 class TemporalConvNet(tfkl.Layer):
-    def __init__(self, filter_sizes, kernel_size=3, dropout=0.2,
+    def __init__(self, filter_sizes, kernel_size=2, dropout=0.2,
                  trainable=True, name=None, dtype=None, 
                  activity_regularizer=None, **kwargs):
         super(TemporalConvNet, self).__init__(
@@ -449,11 +465,14 @@ def if_last(ls):
         yield i + 1 == len(ls), x
 
 def dense_layers(sizes, activation_fn=tf.nn.leaky_relu):
-    # no activation in the last layer, because 
+    # no activation in the last layer, because either it is 
+    # a) the decoder/generative-layer which will apply a sigmoid activation function itself, or 
+    # b) the encoder/inference-layer which does not need a activation function because ...??? TODO find a reason for this
+    
     return [tfkl.Dense(size, activation=None if is_last else activation_fn) for is_last, size in if_last(sizes)]
 
 
-class R_VAE(tf.keras.Model):
+class DrosophVAE(tf.keras.Model):
     def __init__(self, latent_dim, input_shape, batch_size, 
                  n_layers=3, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, filters_conv_layer=None):
         """
@@ -468,7 +487,7 @@ class R_VAE(tf.keras.Model):
         dropout_rate_temporal   float, in [0, 1). dropout rate for temporal blocks (conv layers).
         filters_conv_layer      list[int]. filter sizes for conv layers
         """
-        super(R_VAE, self).__init__()
+        super(DrosophVAE, self).__init__()
         self.latent_dim = latent_dim
         self._input_shape = input_shape
         self._batch_size = batch_size
@@ -517,9 +536,13 @@ class R_VAE(tf.keras.Model):
         if self.temporal_conv_net:
             # TODO combine them into one? max pooling or something
             x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, logvar = tf.split(self.inference_net(x_tmp), num_or_size_splits=2, axis=1)
+            mean, logvar = tf.split(self.inference_net(x_tmp), 
+                                    num_or_size_splits=2,
+                                    axis=1)
         else:
-            mean, logvar = tf.split(self.inference_net(x), num_or_size_splits=2, axis=1)
+            mean, logvar = tf.split(self.inference_net(x),
+                                    num_or_size_splits=2,
+                                    axis=1)
         return mean, logvar
   
     def reparameterize(self, mean, logvar):
@@ -558,8 +581,6 @@ class R_VAE(tf.keras.Model):
 # <markdowncell>
 
 # ## Define the loss function and the optimizer
-# 
-
 
 # <markdowncell>
 
@@ -651,13 +672,13 @@ tf.reset_default_graph()
 test_losses = []
 train_losses = []
 
-model = R_VAE(latent_dim, 
-              input_shape=data_train.shape[1:], 
-              batch_size=run_config['batch_size'], 
-              n_layers=4, 
-              dropout_rate_temporal=0.2,
-              loss_weight_reconstruction=1.0,
-              loss_weight_kl=0.0)
+model = DrosophVAE(latent_dim, 
+                   input_shape=data_train.shape[1:], 
+                   batch_size=run_config['batch_size'], 
+                   n_layers=4, 
+                   dropout_rate_temporal=0.2,
+                   loss_weight_reconstruction=1.0,
+                   loss_weight_kl=0.0)
 
 model.inference_net.summary()
 model.generative_net.summary()
@@ -805,7 +826,9 @@ else:
 
 # <codecell>
 
-np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(reconstructed_data, axis=1)))
+_mean_recon_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(reconstructed_data, axis=1)))
+_mean_gen_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(generated_data[:len(input_data)], axis=1)))
+print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/gen: {_mean_gen_:0.4f}")
 
 # <markdowncell>
 
@@ -825,11 +848,16 @@ LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
-cluster_assignments = HDBSCAN(min_cluster_size=4).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+# <codecell>
+
+cluster_assignments = HDBSCAN(min_cluster_size=15).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+
+# <codecell>
 
 plt.figure(figsize=(20, 12))
 for cluster in np.unique(cluster_assignments):
     c_idx = cluster_assignments == cluster
+    c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
     sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster)
     
 plt.title('T-SNE proejection of latent space (mean & var stacked)');
