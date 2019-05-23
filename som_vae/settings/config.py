@@ -22,8 +22,10 @@ STUDY_ID = "180920_aDN_CsCh"
 EXPERIMENT_ID = "001_SG1"
 FLY_ID = "Fly2"
 
+
+
 if get_hostname() == 'upramdyapc6':
-    __DATA_ROOT__ = "/home/samuel/"
+    __DATA_ROOT__ = "/home/samuel/neural_clustering_data"
     __EXPERIMENT_ROOT__ =  "/ramdya-nas/SVB/experiments"
 elif get_hostname() == 'contosam':
     __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
@@ -39,6 +41,8 @@ __VIDEO_ROOT__ = f"{__DATA_ROOT__}/videos"
 PATH_EXPERIMENT = "{base_path}/{study_id}/{fly_id}/{experiment_id}"
 PATH_EXPERIMENT_POSITIONAL_DATA = "{base_experiment_path}/behData/images/"
 PATH_EXPERIMENT_IMAGE = "{base_experiment_path}/behData/images/camera_{camera_id}_img_{{image_id:0>6}}.jpg"
+
+PATH_TO_FIGURES = f"{__DATA_ROOT__}/figures"
 
 #POSE_DATA_PATH = POSE_DATA_BASE_PATH.format(experiment_id=EXPERIMENT_ID)
 
@@ -113,3 +117,22 @@ def get_path_for_image(d, frame_id, base_path=__EXPERIMENT_ROOT__, camera_id=CAM
 
     return path_image.format(image_id=frame_id)
 
+
+def config_description(config):
+    """to be used with a `run_config` from reparam_vae
+    """
+    def _bool_(v):
+        return 'T' if config[v] else 'F'
+    
+    s = '-'.join([f"data-{config['data_type']}",
+                f"time-{_bool_('use_time_series')}",
+                f"kernel-{config['conv_layer_kernel_size']}",
+                f"n_clayers-{config['n_conv_layers']}",
+                f"latent_dim-{config['latent_dim']}",
+                f"multiple_flys-{_bool_('use_all_experiments')}", 
+               ])
+    
+    if config['debug']:
+        s += ''.join([k for k, v in config.items() if k.startswith('d_') and v])
+        
+    return s

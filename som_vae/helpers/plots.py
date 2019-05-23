@@ -6,6 +6,24 @@ from sklearn.manifold import TSNE
 from som_vae.settings import config, skeleton
 
 
+def save_figure(func):
+    """Decorator for saving figures. Suptitle must be set."""
+    def clean_string(s):
+        _replacements_ = [("\'", ""), (" ", "-"), (",", "-"), ("\n", ""), ("(", "_"), (")", "")]
+        for m, r in _replacements_:
+            s = s.replace(m, r)
+
+        return s.lower()
+    def wrapper(*args, **kwargs):
+        fig = func(*args, **kwargs)
+        if fig is None:
+            return fig
+        s = clean_string(fig._suptitle.get_text())
+        fig.savefig(f"{config.PATH_TO_FIGURES}/{s}.png")
+        return fig
+    return wrapper
+
+
 def _get_feature_name_(tracking_id):
     return str(skeleton.tracked_points[tracking_id])[len('Tracked.'):]
 
@@ -43,41 +61,65 @@ def ploting_frames(joint_positions):
         plt.suptitle(_get_leg_name_(leg))
 
 
-def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, validation_cut_off=None):
-    for leg in config.LEGS:
-        fig, axs = plt.subplots(1, config.NB_OF_AXIS * 2, sharex=True, figsize=(25, 10))
+@save_figure
+def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, validation_cut_off=None, run_config=None):
+    fig, axs = plt.subplots(len(config.LEGS), config.NB_OF_AXIS * 2, sharex=True, figsize=(25, 10))
+
+    for idx_leg, leg in enumerate(config.LEGS):
         for axis in range(config.NB_OF_AXIS):
-            cur_ax = axs[axis * 2]
-            rec_ax = axs[axis * 2 + 1]
+            cur_ax = axs[idx_leg][axis * 2]
+            rec_ax = axs[idx_leg][axis * 2 + 1]
 
             if validation_cut_off is not None:
                 for a in [cur_ax, rec_ax]:
                     a.axvline(validation_cut_off, label='validation cut off', linestyle='--')
 
             for tracked_point in range(config.NB_TRACKED_POINTS):
-                cur_ax.plot(real_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
-                rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}")
+                _label_ = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}"
+                cur_ax.plot(real_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
+                rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
+
                 cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
-                if axis == 0:
-                    cur_ax.set_ylabel('x pos')
-                    rec_ax.set_ylabel('x pos')
-                else:
-                    cur_ax.set_ylabel('y pos')
-                    rec_ax.set_ylabel('y pos')
-                cur_ax.legend(loc='upper right')
-                cur_ax.set_xlabel('frame')
-                rec_ax.legend(loc='upper right')
-                rec_ax.set_xlabel('frame')
-                cur_ax.set_title('original data')
-                rec_ax.set_title('reconstructed data')
+                rec_ax.set_yticks([])
+
+    for i in range(config.NB_OF_AXIS):
+        axs[0][i * 2].set_title('input data')
+        axs[0][i * 2 + 1].set_title('reconstructed data')
+
+        axs[-1][i * 2].set_xlabel('frames')
+        axs[-1][i * 2 + 1].set_xlabel('frames')
+
+    for i in range(len(config.LEGS)):
+        axs[i][0].set_ylabel(f"{_get_leg_name_(leg)}: x pos")
+        axs[i][2].set_ylabel(f"{_get_leg_name_(leg)}: y pos")
+
+    _, labels = axs[0][0].get_legend_handles_labels()
+    fig.legend(labels, loc='upper right')
+    fig.suptitle(f"Comparing input and reconstruction\n({config.config_description(run_config)})")
+    fig.align_ylabels(axs)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    return fig
 
 
+@save_figure
+def plot_losses(train_loss, test_loss, run_config):
+    fig = plt.figure(figsize=(15, 8))
+    plt.plot(train_loss, label='train')
+    plt.plot(test_loss, label='test')
+    plt.xlabel('epochs')
+    plt.ylabel('loss (ELBO)')
+    plt.legend()
 
-        #plt.xlabel('frame')
-        #plt.legend(loc='lower right')
-        plt.suptitle(_get_leg_name_(leg))
+    fig.suptitle(f"Loss (ELBO)\n({config.config_description(run_config)})")
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
 
-def plot_losses(losses, legend=None, title=None):
+    return fig
+
+
+def plot_losses_v0(losses, legend=None, title=None):
+    """the version for the SOM-VAE model"""
     plt.figure(figsize=(15, 8))
     if legend is None:
         legend = ['train', 'test', 'test_recon']
@@ -180,7 +222,8 @@ def plot_tnse(X, y, title='t-SNE'):
     return fig
 
 
-def plot_2d_distribution(X_train, X_test, n_legs=3):
+@save_figure
+def plot_2d_distribution(X_train, X_test, n_legs=3, run_config=None):
     fig, ax = plt.subplots(nrows=n_legs, ncols=2, figsize=(10, 8))
 
     for leg_idx in range(n_legs):
@@ -196,14 +239,15 @@ def plot_2d_distribution(X_train, X_test, n_legs=3):
     ax[0][0].set_title('training data')
     ax[0][1].set_title('testing data')
 
-    fig.suptitle('distribution of input')
+    plt.suptitle(f"distribution of input\n({config.config_description(run_config)})")
     plt.tight_layout()
-    plt.subplots_adjust(top=0.97) # necessary for the title not to be in the first plot
+    plt.subplots_adjust(top=0.89) # necessary for the title not to be in the first plot
 
     return fig
 
 
-def plot_distribution_of_angle_data(data):
+@save_figure
+def plot_distribution_of_angle_data(data, run_config):
     from som_vae.settings.data import get_3d_columns_names
     """
     data is should be a list of lists (on list for each experiment)
@@ -212,16 +256,47 @@ def plot_distribution_of_angle_data(data):
     fig, axs = plt.subplots(nrows=len(data), ncols=3, figsize=(20, len(data) // 2))
 
     for i, data_set in enumerate(data):
-        selected_cols =  np.where(np.var(data_set, axis=0) > 0.0)[0]
+        selected_cols = np.where(np.var(data_set, axis=0) > 0.0)[0]
         column_names = get_3d_columns_names(selected_cols)
 
         for s, cn in zip(selected_cols, column_names):
             sns.distplot(data_set[:, s], label=cn, ax=axs[i][int(cn[len('limb: '):len('limb: 0')])])
 
 
-    plt.suptitle('distribution of angled data')
+    plt.suptitle(f"distribution of angled data\n({config.config_description(run_config)})")
+    plt.tight_layout()
+
     plt.subplots_adjust(top=0.96)
     for i, ax in enumerate(axs[0]):
         ax.set_title(f"limb {i}")
+
+    return fig
+
+
+@save_figure
+def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, run_config):
+    fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
+    col_names = SD.get_3d_columns_names(selected_columns)
+
+    for c in range(X_train.shape[-1]):
+        if run_config['use_time_series']:
+            sns.distplot(X_train[:, -1, c],ax=axs[c // 3][0])
+            sns.distplot(X_test[:, -1, c], ax=axs[c // 3][1])
+        else:
+            sns.distplot(X_train[:, c],ax=axs[c // 3][0])
+            sns.distplot(X_test[:, c], ax=axs[c // 3][1])
+
+
+    for i, a in enumerate(axs):
+        a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
+
+    plt.suptitle(f"distribution of train and test data\n({config.config_description(run_config)})")
+
+    axs[0][0].set_title('train')
+    axs[0][1].set_title('test')
+
+    # order of these two calls is important, sadly
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.84)
 
     return fig

@@ -24,3 +24,4 @@ def to_time_series(data, sequence_length):
     for i in range(len(data)):
         if i + sequence_length <= len(data):
             yield data[i:i+sequence_length]
+

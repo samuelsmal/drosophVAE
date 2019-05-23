@@ -7,44 +7,6 @@
 
 # <markdowncell>
 
-# ## Constants
-
-# <codecell>
-
-!ls $config.__EXPERIMENT_ROOT__
-
-# <codecell>
-
-_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
-
-_DATA_TYPE_3D_ANGLE_ = '3d_angle'
-_DATA_TYPE_2D_POS_ = '2d_pos'
-_SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
-
-run_config = {
-    'debug': False,                # general flag for debug mode, triggers all `d_.*`-options.
-    'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
-    'd_sinoid_data': True, 
-    'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
-    'use_all_experiments': False,
-    'data_type': '3d_angle',
-    'use_time_series': False,       # triggers time series application, without this the model is only dense layers
-    'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
-    'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'latent_dim': 2,               # should be adapted given the input dim
-    'batch_size': 100
-}
-
-if run_config['use_all_experiments']:
-    # takes way too long otherwise
-    run_config['batch_size'] = 1000
-
-if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
-    raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
-
-# <markdowncell>
-
 # ## Import TensorFlow and enable Eager execution
 
 # <codecell>
@@ -98,6 +60,58 @@ jupyter.fix_layout()
 
 # <markdowncell>
 
+# ## Constants
+
+# <codecell>
+
+# all those experiments and data will be used
+from som_vae.settings import config
+print(f"this is the main experiment, study, and fly id: {config.full_experiment_id()}.\n\nloadable experiments. there is a blacklist below.")
+!ls $config.__EXPERIMENT_ROOT__
+
+# <codecell>
+
+# if you want to see the flys as well, or just more information
+# !tree -L 2 $config.__EXPERIMENT_ROOT__
+
+# <codecell>
+
+_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
+
+_DATA_TYPE_3D_ANGLE_ = '3d_angle'
+_DATA_TYPE_2D_POS_ = '2d_pos'
+_SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
+
+run_config = {
+    'debug': False,                # general flag for debug mode, triggers all `d_.*`-options.
+    'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
+    'd_sinoid_data': True, 
+    'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
+    'use_all_experiments': False,
+    'data_type': _DATA_TYPE_2D_POS_,
+    'use_time_series': False,       # triggers time series application, without this the model is only dense layers
+    'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
+    'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
+    'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
+    'latent_dim': 2,               # should be adapted given the input dim
+    'batch_size': 100
+}
+
+if run_config['use_all_experiments']:
+    # takes way too long otherwise
+    run_config['batch_size'] = 1000
+
+if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
+    raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
+    
+if run_config['n_conv_layers'] is None:
+    run_config['n_conv_layers'] = np.int(np.ceil(np.log2((run_config['time_series_length'] - 1) / (2 * (run_config['conv_layer_kernel_size'] - 1)) + 1)))
+
+if run_config['conv_layer_kernel_size'] is None:
+    raise NotImplementedError('ups')
+
+# <markdowncell>
+
 # ## Loading of 2d positional data
 
 # <codecell>
@@ -114,7 +128,7 @@ def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
 
 if not run_config['use_all_experiments']:
     frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
-    frames_of_interest = ~frames_idx_with_labels.label.isin([settings.data._BehaviorLabel_.REST])
+    frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
 
 # <codecell>
 
@@ -122,8 +136,6 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     if run_config['use_all_experiments']:
         all_experiments = experiments_from_root()
         joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments)
-
-        # TODO do the other objects as well
     else:
         joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
@@ -133,11 +145,12 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
                                                .to_list()
 
         # TODO form a wrapper around them
-        warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-        frames_of_interest = frames_of_interest[:len(joint_positions)]
+        if len(frames_of_interest) != len(joint_positions):
+            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
         
-        joint_positions = joint_positions[frames_of_interest]
-        frames_idx_with_labels = frames_idx_with_labels[frames_of_interest]
+        joint_positions = joint_positions[frames_of_interest[:len(joint_positions)]]
+        frames_idx_with_labels = frames_idx_with_labels.iloc[frames_of_interest]
         images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
 
 # <markdowncell>
@@ -235,10 +248,6 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
 # <codecell>
 
-reshaped_joint_position.shape
-
-# <codecell>
-
 def _to_time_series_(x):
     return np.array(list(misc.to_time_series(x, sequence_length=run_config['time_series_length'])))
 
@@ -302,13 +311,49 @@ else:
 if run_config['use_time_series']:
     data_train = reshaped_joint_position[:n_of_data_points]
     data_test = reshaped_joint_position[n_of_data_points:]
-    display.display(pd.DataFrame(reshaped_joint_position[:, -1, :]).describe())
+    print('train')
+    display.display(pd.DataFrame(data_train[:, -1, :]).describe())
+    print('test')
+    display.display(pd.DataFrame(data_test[:, -1, :]).describe())
 else:
     data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
     data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
+    print('train')
     display.display(pd.DataFrame(data_train).describe())
+    print('test')
+    display.display(pd.DataFrame(data_test).describe())
     
 print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
+
+# <codecell>
+
+@plots.save_figure
+def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, run_config):
+    fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
+    col_names = SD.get_3d_columns_names(selected_columns)
+
+    for c in range(X_train.shape[-1]):
+        if run_config['use_time_series']:
+            sns.distplot(X_train[:, -1, c],ax=axs[c // 3][0])
+            sns.distplot(X_test[:, -1, c], ax=axs[c // 3][1])
+        else:
+            sns.distplot(X_train[:, c],ax=axs[c // 3][0])
+            sns.distplot(X_test[:, c], ax=axs[c // 3][1])
+
+
+    for i, a in enumerate(axs):
+        a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
+
+    plt.suptitle(f"distribution of train and test data\n({config.config_description(run_config)})")
+
+    axs[0][0].set_title('train')
+    axs[0][1].set_title('test')
+    
+    # order of these two calls is important, sadly
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.84)
+    
+    return fig
 
 # <codecell>
 
@@ -316,32 +361,17 @@ print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
 # Making sure that the train/test distributions are not too different from each other
 #
 if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-    fig, axs = plt.subplots(nrows=data_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
-    col_names = SD.get_3d_columns_names(selected_cols)
-
-    for c in range(data_train.shape[-1]):
-        if run_config['use_time_series']:
-            sns.distplot(data_train[:, -1, c],ax=axs[c // 3][0])
-            sns.distplot(data_test[:, -1, c], ax=axs[c // 3][1])
-        else:
-            sns.distplot(data_train[:, c],ax=axs[c // 3][0])
-            sns.distplot(data_test[:, c], ax=axs[c // 3][1])
-
-    plt.suptitle('distribution of train and test data')
-
-    for i, a in enumerate(axs):
-        a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
-
-
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    axs[0][0].set_title('train')
-    axs[0][1].set_title('test')
+    fig = plots.plot_3d_angle_data_distribution(data_train, data_test, selected_cols, run_config=run_config)
 else:
     if run_config['use_time_series']:
-        plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :])
+        fig = plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :], run_config=run_config)
     else:
-        plots.plot_2d_distribution(data_train, data_test);
+        fig = plots.plot_2d_distribution(data_train, data_test, run_config=run_config)
+
+# <codecell>
+
+from IPython.display import Image
+Image('../neural_clustering_data/figures/distribution-of-input_data-2d_pos-time-f-kernel-2-n_clayers-3-latent_dim-2-multiple_flys-f.png')
 
 # <markdowncell>
 
@@ -404,14 +434,6 @@ for k in range(2, 5):
 plt.xlabel('number of layers')
 plt.ylabel('receptive field size')
 plt.legend()
-
-# <codecell>
-
-if run_config['n_conv_layers'] is None:
-    run_config['n_conv_layers'] = np.int(np.ceil(np.log2((run_config['time_series_length'] - 1) / (2 * (run_config['conv_layer_kernel_size'] - 1)) + 1)))
-
-if run_config['conv_layer_kernel_size'] is None:
-    raise NotImplementedError('ups')
 
 # <markdowncell>
 
@@ -688,7 +710,7 @@ train_losses = []
 model = DrosophVAE(latent_dim, 
                    input_shape=data_train.shape[1:], 
                    batch_size=run_config['batch_size'], 
-                   n_layers=4, 
+                   n_layers=run_config['n_conv_layers'], 
                    dropout_rate_temporal=0.2,
                    loss_weight_reconstruction=1.0,
                    loss_weight_kl=0.5)
@@ -701,7 +723,7 @@ model.generative_net.summary()
 
 _CONFIG_HASH_ = get_config_hash({**model._config_(), **run_config})
 
-_base_path_ = f"{settings.config.__DATA_ROOT__}/neural_clustering_data/tvae_logs/{_CONFIG_HASH_}"
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config)}_{_CONFIG_HASH_}"
 train_log_dir = _base_path_ + '/train'
 test_log_dir = _base_path_ + '/test'
 train_summary_writer = tfc.summary.create_file_writer(train_log_dir)
@@ -753,15 +775,7 @@ while True:
 
 # <codecell>
 
-len(train_losses)
-
-# <codecell>
-
-plt.plot(train_losses, label='train')
-plt.plot(test_losses, label='test')
-plt.xlabel('epochs')
-plt.ylabel('loss (ELBO)')
-plt.legend()
+plots.plot_losses(train_losses, test_losses, run_config=run_config);
 
 # <markdowncell>
 
@@ -769,13 +783,13 @@ plt.legend()
 
 # <codecell>
 
-def _reverse_to_original_shape_(pos_data):
+def _reverse_to_original_shape_(X):
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
         input_shape = (15, -1)
     else:
-        input_shape = pos_data.shape[1:]
+        input_shape = X.shape[1:]
         
-    return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
+    return scaler.inverse_transform(X).reshape(X.shape[0], *(input_shape))
 
 # <codecell>
 
@@ -794,13 +808,17 @@ generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() f
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     #plots.plot_comparing_joint_position_with_reconstructed(input_data, generated_data, validation_cut_off=len(input_data))
-    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train));
+    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train), run_config=run_config);
 else:
     fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
+    start = 100
+    end = 300
+    xticks = np.arange(start, end)
     for i, c in enumerate(selected_cols):
-        axs[i][0].plot(input_data[:100, i])
-        axs[i][1].plot(generated_data[:100, i])
-        axs[i][2].plot(reconstructed_data[:100, i])
+        _idx_ = np.s_[start:end, i]
+        axs[i][0].plot(xticks, input_data[_idx_])
+        axs[i][1].plot(xticks, generated_data[_idx_])
+        axs[i][2].plot(xticks, reconstructed_data[_idx_])
         
         #for a in axs[i]:
         #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
@@ -808,6 +826,10 @@ else:
     axs[0][0].set_title('input')
     axs[0][1].set_title('generated')
     axs[0][2].set_title('reconstructed')
+    for i in range(3):
+        axs[-1][i].set_xlabel('time step')
+    
+    plt.suptitle(f"Comparision of selection of data")
     
     #plt.tight_layout()
     #plt.savefig(f"./figures/{_CONFIG_HASH_}_input_gen_recon_comparision.png")
