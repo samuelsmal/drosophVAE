@@ -93,7 +93,7 @@ run_config = {
     'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'latent_dim': 2,               # should be adapted given the input dim
+    'latent_dim': 8,               # should be adapted given the input dim
     'batch_size': 100
 }
 
@@ -257,6 +257,7 @@ def _prep_2d_pos_data_(x):
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
 scaler = MinMaxScaler()
+scaler = StandardScaler()
 
 #
 # reshapping the data 
@@ -324,36 +325,6 @@ else:
     display.display(pd.DataFrame(data_test).describe())
     
 print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
-
-# <codecell>
-
-@plots.save_figure
-def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, run_config):
-    fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
-    col_names = SD.get_3d_columns_names(selected_columns)
-
-    for c in range(X_train.shape[-1]):
-        if run_config['use_time_series']:
-            sns.distplot(X_train[:, -1, c],ax=axs[c // 3][0])
-            sns.distplot(X_test[:, -1, c], ax=axs[c // 3][1])
-        else:
-            sns.distplot(X_train[:, c],ax=axs[c // 3][0])
-            sns.distplot(X_test[:, c], ax=axs[c // 3][1])
-
-
-    for i, a in enumerate(axs):
-        a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
-
-    plt.suptitle(f"distribution of train and test data\n({config.config_description(run_config)})")
-
-    axs[0][0].set_title('train')
-    axs[0][1].set_title('test')
-    
-    # order of these two calls is important, sadly
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.84)
-    
-    return fig
 
 # <codecell>
 
@@ -650,6 +621,16 @@ data_test.shape
 
 # <codecell>
 
+# For the loss function:
+#
+# https://github.com/pytorch/examples/issues/399
+#   Argues that since we are using a normal distribution we should not use any activation function in the last layer
+#   and the loss should be MSE.
+# https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder?rq=1
+#   Some general discussion about KL vs recon-loss
+# https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
+    
+
 def log_normal_pdf(sample, mean, logvar, raxis=1):
     log2pi = tf.log(2. * np.pi)
     return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
@@ -664,12 +645,13 @@ def compute_loss(model, x):
         cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
     else:
         cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
+        #cross_ent = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+        
         
     # TODO check this!
     # reconstruction loss
     #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
     logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
-    
     # KL loss
     logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
     logqz_x = log_normal_pdf(z, mean, logvar)
@@ -687,13 +669,6 @@ def apply_gradients(optimizer, gradients, variables, global_step=None):
 # <markdowncell>
 
 # ## training
-
-# <codecell>
-
-from datetime import datetime
-
-def get_config_hash(config, digest_length=5):
-    return str(hash(json.dumps({**run_config, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
 
 # <codecell>
 
@@ -721,13 +696,18 @@ if run_config['use_time_series']:
 model.inference_net.summary()
 model.generative_net.summary()
 
-_CONFIG_HASH_ = get_config_hash({**model._config_(), **run_config})
-
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config)}_{_CONFIG_HASH_}"
+_config_hash_ = config.get_config_hash(run_config)
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config)}_{_config_hash_}"
 train_log_dir = _base_path_ + '/train'
 test_log_dir = _base_path_ + '/test'
 train_summary_writer = tfc.summary.create_file_writer(train_log_dir)
 test_summary_writer = tfc.summary.create_file_writer(test_log_dir)
+
+# <codecell>
+
+# TODO for later
+#from keras.utils import plot_model
+#plot_model(model)
 
 # <codecell>
 
@@ -740,7 +720,7 @@ def _compute_loss_for_data_(model, data):
     
     return elbo
 
-print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_CONFIG_HASH_}")
+print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_config_hash_}")
 print(f"will train for ever...")
 epoch = len(train_losses)
 while True:
@@ -800,7 +780,7 @@ if run_config['use_time_series']:
 else:
     input_data = _reverse_to_original_shape_(input_data_raw)
     
-reconstructed_data = _reverse_to_original_shape_(model.predict(input_data_raw).numpy())
+reconstructed_data = np.tanh(_reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()))
 _min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
 generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))
 
@@ -838,7 +818,7 @@ else:
 
 _mean_recon_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(reconstructed_data, axis=1)))
 _mean_gen_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(generated_data[:len(input_data)], axis=1)))
-print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/gen: {_mean_gen_:0.4f}")
+print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/gen: {_mean_gen_:0.4f}. mse (input/recon): {((input_data - reconstructed_data) ** 2).mean()}")
 
 # <markdowncell>
 

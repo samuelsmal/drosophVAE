@@ -1,4 +1,6 @@
+import json
 import pickle
+from datetime import datetime
 import pathlib
 
 from som_vae.helpers.misc import get_hostname
@@ -123,16 +125,19 @@ def config_description(config):
     """
     def _bool_(v):
         return 'T' if config[v] else 'F'
-    
+
     s = '-'.join([f"data-{config['data_type']}",
                 f"time-{_bool_('use_time_series')}",
                 f"kernel-{config['conv_layer_kernel_size']}",
                 f"n_clayers-{config['n_conv_layers']}",
                 f"latent_dim-{config['latent_dim']}",
-                f"multiple_flys-{_bool_('use_all_experiments')}", 
+                f"multiple_flys-{_bool_('use_all_experiments')}",
                ])
-    
+
     if config['debug']:
         s += ''.join([k for k, v in config.items() if k.startswith('d_') and v])
-        
+
     return s
+
+def get_config_hash(config, digest_length=5):
+    return str(hash(json.dumps({**config, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
