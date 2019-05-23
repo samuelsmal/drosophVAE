@@ -83,7 +83,7 @@ _DATA_TYPE_2D_POS_ = '2d_pos'
 _SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 run_config = {
-    'debug': False,                # general flag for debug mode, triggers all `d_.*`-options.
+    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
     'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
     'd_sinoid_data': True, 
     'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
@@ -96,6 +96,8 @@ run_config = {
     'latent_dim': 8,               # should be adapted given the input dim
     'batch_size': 100
 }
+
+# And now the ... ugly parts begin. -> TODO put this in a class, 
 
 if run_config['use_all_experiments']:
     # takes way too long otherwise
@@ -290,15 +292,29 @@ else:
 if run_config['debug']:
     if run_config['d_zero_data']:
         # resetting the scaler to make our life easier down below the pipeline
-        reshaped_joint_position = scaler.fit_transform(np.zeros_like(joint_positions))
+        _dummy_data_ = np.zeros_like(joint_positions)
     elif run_config['d_sinoid_data']:
-        _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
-                                  for x in range(len(joint_positions))] 
-                                 for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
-        reshaped_joint_position = scaler.fit_transform(_dummy_data_)
+        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+            _dummy_data_ = np.zeros_like(joint_positions)
+            for frame in range(_dummy_data_.shape[0]):
+                for joint in range(_dummy_data_.shape[1]):
+                    _dummy_data_[frame, joint, :] = np.sin(2 * np.pi * frame/_dummy_data_.shape[0] + joint / _dummy_data_.shape[1])
+                
+        else:
+            _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
+                                      for x in range(len(joint_positions))] 
+                                     for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
+            
+            
+    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+        _dummy_data_ = _prep_2d_pos_data_(_dummy_data_)
+        
         
     if run_config['use_time_series']:
+        reshaped_joint_position = scaler.fit_transform(_dummy_data_)
         reshaped_joint_position = _to_time_series_(reshaped_joint_position)
+    else:
+        reshaped_joint_position = _dummy_data_
 
 #
 # split and apply scaler
@@ -338,11 +354,6 @@ else:
         fig = plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :], run_config=run_config)
     else:
         fig = plots.plot_2d_distribution(data_train, data_test, run_config=run_config)
-
-# <codecell>
-
-from IPython.display import Image
-Image('../neural_clustering_data/figures/distribution-of-input_data-2d_pos-time-f-kernel-2-n_clayers-3-latent_dim-2-multiple_flys-f.png')
 
 # <markdowncell>
 
@@ -644,18 +655,19 @@ def compute_loss(model, x):
         # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
         cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
     else:
-        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
-        #cross_ent = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+        #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
+        recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
         
         
     # TODO check this!
     # reconstruction loss
     #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
-    logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
+    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
     # KL loss
     logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
     logqz_x = log_normal_pdf(z, mean, logvar)
-    return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
+    #return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
+    return model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*(logpz - logqz_x)
 
 def compute_gradients(model, x): 
     with tf.GradientTape() as tape: 
@@ -688,7 +700,7 @@ model = DrosophVAE(latent_dim,
                    n_layers=run_config['n_conv_layers'], 
                    dropout_rate_temporal=0.2,
                    loss_weight_reconstruction=1.0,
-                   loss_weight_kl=0.5)
+                   loss_weight_kl=0.005)
 
 if run_config['use_time_series']:
     model.temporal_conv_net.summary()
@@ -716,7 +728,8 @@ def _compute_loss_for_data_(model, data):
     loss = tfe.metrics.Mean()
     for x in data:
         loss(compute_loss(model, x))
-    elbo = -loss.result()
+    #elbo = -loss.result()
+    elbo = loss.result()
     
     return elbo
 
@@ -787,8 +800,8 @@ generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() f
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    #plots.plot_comparing_joint_position_with_reconstructed(input_data, generated_data, validation_cut_off=len(input_data))
-    plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, validation_cut_off=len(data_train), run_config=run_config);
+    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data,
+                                                                 validation_cut_off=len(data_train), run_config=run_config, epochs=len(train_losses));
 else:
     fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
     start = 100
