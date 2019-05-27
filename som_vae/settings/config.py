@@ -120,24 +120,47 @@ def get_path_for_image(d, frame_id, base_path=__EXPERIMENT_ROOT__, camera_id=CAM
     return path_image.format(image_id=frame_id)
 
 
-def config_description(config):
+def config_description(config, short=False):
     """to be used with a `run_config` from reparam_vae
     """
     def _bool_(v):
         return 'T' if config[v] else 'F'
 
-    s = '-'.join([f"data-{config['data_type']}",
-                f"time-{_bool_('use_time_series')}",
-                f"kernel-{config['conv_layer_kernel_size']}",
-                f"n_clayers-{config['n_conv_layers']}",
-                f"latent_dim-{config['latent_dim']}",
-                f"multiple_flys-{_bool_('use_all_experiments')}",
-               ])
+    valus_of_interest = [
+        ("data", "", config['data_type']),
+        ("time", "t", _bool_('use_time_series')),
+        ("kernel", "k", config['conv_layer_kernel_size']),
+        ("n_clayers", "ncl", config['n_conv_layers']),
+        ("latent_dim", "ld", config['latent_dim']),
+        ("multiple_flys", "mf", _bool_('use_all_experiments')),
+    ]
+
+    descr_idx = 1 if short else 0
+    descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest[1:]))
+
+    if short:
+        descr_str = valus_of_interest[0][2] + '-' + descr_str
 
     if config['debug']:
-        s += ''.join([k for k, v in config.items() if k.startswith('d_') and v])
+        descr_str += ''.join([k for k, v in config.items() if k.startswith('d_') and v])
 
-    return s
+    return descr_str
+
+
+def model_config_description(config, short=False):
+    valus_of_interest = [
+        ("epochs", "e", config['epochs']),
+        ("loss_weight_recon", "lwr", config['loss_weight_reconstruction']),
+        ("loss_weight_kl", "lwkl", config['loss_weight_kl']), 
+    ]
+
+    descr_idx = 1 if short else 0
+
+    return '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest))
+
+
+def exp_desc(run_config, model_config, short=False):
+    return config_description(run_config, short=short) + '-' + model_config_description(model_config, short=short)
 
 def get_config_hash(config, digest_length=5):
     return str(hash(json.dumps({**config, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]

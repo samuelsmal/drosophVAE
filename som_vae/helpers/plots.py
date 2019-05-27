@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 
 from som_vae.settings import config, skeleton
+from som_vae.settings.data import get_3d_columns_names
 
 
 def save_figure(func):
@@ -62,7 +63,7 @@ def ploting_frames(joint_positions):
 
 
 @save_figure
-def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, generated_positions, validation_cut_off=None, run_config=None, epochs=None):
+def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, generated_positions, validation_cut_off=None, exp_desc=None):
     fig, axs = plt.subplots(len(config.LEGS), config.NB_OF_AXIS * 3, sharex=True, figsize=(25, 10))
 
     for idx_leg, leg in enumerate(config.LEGS):
@@ -98,11 +99,11 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
 
     for i in range(len(config.LEGS)):
         axs[i][0].set_ylabel(f"{_get_leg_name_(leg)}: x pos")
-        axs[i][2].set_ylabel(f"{_get_leg_name_(leg)}: y pos")
+        axs[i][3].set_ylabel(f"{_get_leg_name_(leg)}: y pos")
 
     _, labels = axs[0][0].get_legend_handles_labels()
     fig.legend(labels, loc='upper right')
-    fig.suptitle(f"Comparing input and reconstruction\n({config.config_description(run_config)}_epochs-{epochs})")
+    fig.suptitle(f"Comparing input and reconstruction\n({exp_desc})")
     fig.align_ylabels(axs)
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
@@ -110,7 +111,7 @@ def plot_comparing_joint_position_with_reconstructed(real_joint_positions, recon
 
 
 @save_figure
-def plot_losses(train_loss, test_loss, run_config):
+def plot_losses(train_loss, test_loss, exp_desc):
     fig = plt.figure(figsize=(15, 8))
     plt.plot(train_loss, label='train')
     plt.plot(test_loss, label='test')
@@ -118,7 +119,7 @@ def plot_losses(train_loss, test_loss, run_config):
     plt.ylabel('loss (ELBO)')
     plt.legend()
 
-    fig.suptitle(f"Loss (ELBO)\n({config.config_description(run_config)})")
+    fig.suptitle(f"Loss (ELBO)\n({exp_desc})")
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
 
@@ -230,7 +231,7 @@ def plot_tnse(X, y, title='t-SNE'):
 
 
 @save_figure
-def plot_2d_distribution(X_train, X_test, n_legs=3, run_config=None):
+def plot_2d_distribution(X_train, X_test, n_legs=3, exp_desc=None):
     fig, ax = plt.subplots(nrows=n_legs, ncols=2, figsize=(10, 8))
 
     for leg_idx in range(n_legs):
@@ -246,7 +247,7 @@ def plot_2d_distribution(X_train, X_test, n_legs=3, run_config=None):
     ax[0][0].set_title('training data')
     ax[0][1].set_title('testing data')
 
-    plt.suptitle(f"distribution of input\n({config.config_description(run_config)})")
+    plt.suptitle(f"distribution of input\n({exp_desc})")
     plt.tight_layout()
     plt.subplots_adjust(top=0.89) # necessary for the title not to be in the first plot
 
@@ -255,7 +256,6 @@ def plot_2d_distribution(X_train, X_test, n_legs=3, run_config=None):
 
 @save_figure
 def plot_distribution_of_angle_data(data, run_config):
-    from som_vae.settings.data import get_3d_columns_names
     """
     data is should be a list of lists (on list for each experiment)
     """
@@ -281,23 +281,19 @@ def plot_distribution_of_angle_data(data, run_config):
 
 
 @save_figure
-def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, run_config):
+def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, exp_desc):
     fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
-    col_names = SD.get_3d_columns_names(selected_columns)
+    col_names = get_3d_columns_names(selected_columns)
 
     for c in range(X_train.shape[-1]):
-        if run_config['use_time_series']:
-            sns.distplot(X_train[:, -1, c],ax=axs[c // 3][0])
-            sns.distplot(X_test[:, -1, c], ax=axs[c // 3][1])
-        else:
-            sns.distplot(X_train[:, c],ax=axs[c // 3][0])
-            sns.distplot(X_test[:, c], ax=axs[c // 3][1])
+        sns.distplot(X_train[:, c],ax=axs[c // 3][0])
+        sns.distplot(X_test[:, c], ax=axs[c // 3][1])
 
 
     for i, a in enumerate(axs):
         a[0].set_xlabel(col_names[i * 3][:len('limb: 0')])
 
-    plt.suptitle(f"distribution of train and test data\n({config.config_description(run_config)})")
+    plt.suptitle(f"distribution of train and test data\n({exp_desc})")
 
     axs[0][0].set_title('train')
     axs[0][1].set_title('test')

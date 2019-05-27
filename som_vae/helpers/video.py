@@ -148,7 +148,7 @@ def _float_to_int_color_(colors):
 
 def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train,
                                         images_paths_for_experiments, cluster_id_to_visualize=None,
-                                        cluster_colors=None, as_frames=False):
+                                        cluster_colors=None, as_frames=False, exp_desc=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:
@@ -213,15 +213,25 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
                         org=(_train_test_split_marker, image_height - 40),
                         color=_train_test_split_marker_colours[0 if frame_id < n_train else 1])
 
+        # experiment id
         f = cv2.putText(**text_default_args,
                         img=f,
                         text=data._key_(experiment),
                         org=(0, 20),
                         color=(255, 255, 255))
 
+        # image id
+        _text_size, _ = cv2.getTextSize(**text_default_args, text=data._key_(experiment))
         f = cv2.putText(**text_default_args,
                         img=f,
                         text=pathlib.Path(experiment_path).stem,
+                        org=(_text_size[0], 20),
+                        color=(255, 255, 255))
+
+        # model experiment description
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=exp_desc,
                         org=(0, 40),
                         color=(255, 255, 255))
 
@@ -244,7 +254,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
     if as_frames:
         return frames
     else:
-        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id='all', vid_id=cluster_id_to_visualize or 'all')
+        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
         _save_frames_(output_path, frames, format='mp4')
 
         return output_path
@@ -291,8 +301,8 @@ def combine_images_h(img1, img2):
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
     vis = np.zeros((max(h1, h2), w1+w2, img1.shape[2]), np.uint8)
-    vis[:h1, :w1, :] = img1 
-    vis[:h2, w1:w1+w2, :] = img2 
+    vis[:h1, :w1, :] = img1
+    vis[:h2, w1:w1+w2, :] = img2
     #vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
 
     return vis

@@ -33,6 +33,7 @@ from functools import reduce
 from importlib import reload # for debugging and developing, optional
 
 import tensorflow as tf
+import tensorflow_probability as tfp
 tfe = tf.contrib.eager
 tfc = tf.contrib
 tf.enable_eager_execution()
@@ -83,13 +84,13 @@ _DATA_TYPE_2D_POS_ = '2d_pos'
 _SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 run_config = {
-    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
+    'debug': False,                 # general flag for debug mode, triggers all `d_.*`-options.
     'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
     'd_sinoid_data': True, 
     'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
     'use_all_experiments': False,
     'data_type': _DATA_TYPE_2D_POS_,
-    'use_time_series': False,       # triggers time series application, without this the model is only dense layers
+    'use_time_series': True,       # triggers time series application, without this the model is only dense layers
     'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
@@ -344,16 +345,19 @@ print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
 
 # <codecell>
 
+reload(plots)
 #
 # Making sure that the train/test distributions are not too different from each other
 #
-if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-    fig = plots.plot_3d_angle_data_distribution(data_train, data_test, selected_cols, run_config=run_config)
+if run_config['use_time_series']:
+    _plt_data_idx_ = np.s_[:, -1, :]
 else:
-    if run_config['use_time_series']:
-        fig = plots.plot_2d_distribution(data_train[:,-1,:], data_test[:, -1, :], run_config=run_config)
-    else:
-        fig = plots.plot_2d_distribution(data_train, data_test, run_config=run_config)
+    _plt_data_idx_ = np.s_[:]
+    
+if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
+    fig = plots.plot_3d_angle_data_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], selected_cols, exp_desc=config.config_description(run_config))
+else:
+    fig = plots.plot_2d_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], exp_desc=config.config_description(run_config))
 
 # <markdowncell>
 
@@ -405,6 +409,20 @@ test_dataset = to_tf_data(data_test)
 # $$\left(k \ast_{l} f\right)_t = \sum_{\tau=-\infty}^{\infty} k_\tau \cdot f_{t - l\tau}$$
 # 
 # ![](./figures/diluted_convolution.png)
+# ![](./figures/WaveNet_gif.gif)
+
+# <markdowncell>
+
+# VAEs train by maximizing the evidence lower bound (ELBO) on the marginal log-likelihood:
+# 
+# $$\log p(x) \ge \text{ELBO} = \mathbb{E}_{q(z|x)}\left[\log \frac{p(x, z)}{q(z|x)}\right].$$
+# 
+# In practice, we optimize the single sample Monte Carlo estimate of this expectation:
+# 
+# $$\log p(x| z) + \log p(z) - \log q(z|x),$$
+# where $z$ is sampled from $q(z|x)$.
+# 
+# **Note**: we could also analytically compute the KL term, but here we incorporate all three terms in the Monte Carlo estimator for simplicity.
 
 # <codecell>
 
@@ -437,7 +455,7 @@ class TemporalBlock(tfkl.Layer):
         self.filter_size = filter_size
         causal_conv_args = {"padding": "causal",
                             "dilation_rate": dilation_rate, 
-                            "activation": tf.nn.relu}
+                            "activation": tf.nn.leaky_relu}
         self.conv1 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv1")
         self.conv2 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv2")
         self.down_sample = None
@@ -473,14 +491,14 @@ class TemporalBlock(tfkl.Layer):
 
 def if_last(ls):
     for i, x in enumerate(ls):
-        yield i + 1 == len(ls), x
+        yield i, i + 1 == len(ls), x
 
-def dense_layers(sizes, activation_fn=tf.nn.leaky_relu):
+def dense_layers(sizes, activation_fn=tf.nn.leaky_relu, name_prefix=None):
     # no activation in the last layer, because either it is 
     # a) the decoder/generative-layer which will apply a sigmoid activation function itself, or 
     # b) the encoder/inference-layer which does not need a activation function because ...??? TODO find a reason for this
     
-    return [tfkl.Dense(size, activation=None if is_last else activation_fn) for is_last, size in if_last(sizes)]
+    return [tfkl.Dense(size, activation=None if is_last else activation_fn, name=f"{name_prefix}_dense_{idx}") for idx, is_last, size in if_last(sizes)]
 
 def temporal_layers(filter_sizes, kernel_size=2, dropout=0.2):
     return [TemporalBlock(filter_size, kernel_size, dilation_rate=2 ** i, dropout=dropout, name=f"temporal_block_{i}") for i, filter_size in enumerate(filter_sizes)]
@@ -513,11 +531,11 @@ class DrosophVAE(tf.keras.Model):
         self._conv_layer_kernel_size = conv_layer_kernel_size
         
         self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape[-1]),
-                                                 *dense_layers(self._layer_sizes_inference)],
+                                                 *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
                                                  name='inference_net')
 
         self.generative_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=(latent_dim,)),
-                                                  *dense_layers(self._layer_sizes_generative)],
+                                                  *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
                                                   name='generative_net')
         
         if len(input_shape) == 1:
@@ -529,11 +547,20 @@ class DrosophVAE(tf.keras.Model):
                 self.filters_conv_layer = [input_shape[-1]] * 3
             else:
                 self.filters_conv_layer = filters_conv_layer
+                
             self.temporal_conv_net = tfk.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape),
                                                      *temporal_layers(kernel_size=self._conv_layer_kernel_size, 
                                                                       filter_sizes=self.filters_conv_layer,  
                                                                       dropout=dropout_rate_temporal)],
                                                      name='temporal_conv_net')
+            
+            self.inference_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=input_shape),
+                                                     *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
+                                                     name='inference_net')
+        
+            self.generative_net = tf.keras.Sequential([tf.keras.layers.InputLayer(input_shape=list(input_shape[:1]) + [latent_dim]),
+                                                      *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
+                                                      name='generative_net')
         else:
             raise ValueError(f"Input shape is not good, got: {input_shape}")
             
@@ -545,16 +572,17 @@ class DrosophVAE(tf.keras.Model):
                 warnings.warn('KL loss is 0.0. The latent space is not properly trained')
             # The KL-loss is calculated against a normal distribution, 
             # thus it should resemble one and thus sampling should make sense.
-            eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
-        return self.decode(eps, apply_sigmoid=True)
+            #eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
+            eps = tf.random_normal(shape=[self._batch_size] + list(self.generative_net.input_shape[1:]))
+        return self.decode(eps, apply_sigmoid=False)
   
     def encode(self, x, training=False):
         if self.temporal_conv_net:
             # TODO combine them into one? max pooling or something
-            x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, logvar = tf.split(self.inference_net(x_tmp), 
+            #x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
+            mean, logvar = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
                                     num_or_size_splits=2,
-                                    axis=1)
+                                    axis=-1)
         else:
             mean, logvar = tf.split(self.inference_net(x),
                                     num_or_size_splits=2,
@@ -575,6 +603,12 @@ class DrosophVAE(tf.keras.Model):
         return logits
 
     def predict(self, x):
+        # https://github.com/LynnHo/VAE-Tensorflow/blob/master/train.py
+        # epsilon = tf.random_normal(tf.shape(z_mu))
+        # if is_training:
+        #     z = z_mu + tf.exp(0.5 * z_log_sigma_sq) * epsilon
+        # else:
+        #     z = z_mu
         mean, logvar = self.encode(x)
         z = model.reparameterize(mean, logvar)
         return model.decode(z, apply_sigmoid=True)
@@ -593,31 +627,6 @@ class DrosophVAE(tf.keras.Model):
             "loss_weight_reconstruction": self._loss_weight_reconstruction,
             "loss_weight_kl": self._loss_weight_kl,
         }
-
-# <markdowncell>
-
-# ## Define the loss function and the optimizer
-
-# <markdowncell>
-
-# ### Doc
-
-# <markdowncell>
-
-# VAEs train by maximizing the evidence lower bound (ELBO) on the marginal log-likelihood:
-# 
-# $$\log p(x) \ge \text{ELBO} = \mathbb{E}_{q(z|x)}\left[\log \frac{p(x, z)}{q(z|x)}\right].$$
-# 
-# In practice, we optimize the single sample Monte Carlo estimate of this expectation:
-# 
-# $$\log p(x| z) + \log p(z) - \log q(z|x),$$
-# where $z$ is sampled from $q(z|x)$.
-# 
-# **Note**: we could also analytically compute the KL term, but here we incorporate all three terms in the Monte Carlo estimator for simplicity.
-
-# <markdowncell>
-
-# ### Code
 
 # <codecell>
 
@@ -646,19 +655,31 @@ def log_normal_pdf(sample, mean, logvar, raxis=1):
     log2pi = tf.log(2. * np.pi)
     return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
 
-def compute_loss(model, x):
+def compute_loss(model, x, detailed=False):
     mean, logvar = model.encode(x)
     z = model.reparameterize(mean, logvar)
     x_logit = model.decode(z)
     
-    if run_config['use_time_series']:
-        # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
-        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
+    #if run_config['use_time_series']:
+    #    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
+    #    # this works on classification data (or binary data)
+    #    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
+    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
+    #else:
+    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+
+    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+    
+    p = tfp.distributions.Normal(loc=0., scale=1.)
+    q = tfp.distributions.Normal(loc=mean, scale=logvar)
+    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q))
+    loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
+    
+    if detailed:
+        return loss, recon_loss, kl
     else:
-        #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x)
-        recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
-        
-        
+        return loss
+    
     # TODO check this!
     # reconstruction loss
     #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
@@ -667,7 +688,6 @@ def compute_loss(model, x):
     logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
     logqz_x = log_normal_pdf(z, mean, logvar)
     #return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
-    return model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*(logpz - logqz_x)
 
 def compute_gradients(model, x): 
     with tf.GradientTape() as tape: 
@@ -676,6 +696,8 @@ def compute_gradients(model, x):
 
 optimizer = tf.train.AdamOptimizer(1e-4)
 def apply_gradients(optimizer, gradients, variables, global_step=None):
+    # TODO try out gradient clipping
+    #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
     optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
 
 # <markdowncell>
@@ -691,8 +713,8 @@ else:
     latent_dim = run_config['latent_dim'] # 2
 
 tf.reset_default_graph()
-test_losses = []
-train_losses = []
+test_reports = []
+train_reports = []
 
 model = DrosophVAE(latent_dim, 
                    input_shape=data_train.shape[1:], 
@@ -700,7 +722,7 @@ model = DrosophVAE(latent_dim,
                    n_layers=run_config['n_conv_layers'], 
                    dropout_rate_temporal=0.2,
                    loss_weight_reconstruction=1.0,
-                   loss_weight_kl=0.005)
+                   loss_weight_kl=0.)
 
 if run_config['use_time_series']:
     model.temporal_conv_net.summary()
@@ -710,10 +732,9 @@ model.generative_net.summary()
 
 _config_hash_ = config.get_config_hash(run_config)
 _base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config)}_{_config_hash_}"
-train_log_dir = _base_path_ + '/train'
-test_log_dir = _base_path_ + '/test'
-train_summary_writer = tfc.summary.create_file_writer(train_log_dir)
-test_summary_writer = tfc.summary.create_file_writer(test_log_dir)
+train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
+test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
+gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
 
 # <codecell>
 
@@ -726,16 +747,39 @@ test_summary_writer = tfc.summary.create_file_writer(test_log_dir)
 # This is the run cell. Designed to be able to train the model for an arbitrary amount of epochs.
 def _compute_loss_for_data_(model, data):
     loss = tfe.metrics.Mean()
-    for x in data:
-        loss(compute_loss(model, x))
-    #elbo = -loss.result()
-    elbo = loss.result()
+    recon = tfe.metrics.Mean()
+    kl = tfe.metrics.Mean()
+    for batch in data:
+        loss_b, recon_b, kl_b  = compute_loss(model, batch, detailed=True)
+        loss(loss_b)
+        recon(recon_b)
+        kl(kl_b)
+        
+    total_loss = loss.result()
+    total_recon = recon.result()
+    total_kl = kl.result()
     
-    return elbo
+    return total_loss, total_recon, total_kl
+
+def _progress_str_(epoch, train_reports, test_reports, time=None, stopped=False):
+    progress_str = f"Epoch: {epoch:0>4}, train/test loss: {train_reports[-1][0]:0.3f}\t {test_reports[-1][0]:0.3f}"
+    if time:
+        progress_str += f" took {time:0.3f} sec"
+        
+    if stopped:
+        progress_str = "Stopped training during " + progress_str
+        
+    return progress_str
+
+def _tf_write_scalars_(writer, scalars, step):
+    with writer.as_default(), tfc.summary.always_record_summaries():
+        for n, v in scalars:
+            tfc.summary.scalar(n, v, step=step)
+    
 
 print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_config_hash_}")
 print(f"will train for ever...")
-epoch = len(train_losses)
+epoch = len(train_reports)
 while True:
     try:
         start_time = time.time()
@@ -743,32 +787,40 @@ while True:
             gradients, loss = compute_gradients(model, train_x)
             apply_gradients(optimizer, gradients, model.trainable_variables)
         end_time = time.time()
-
-        test_losses += [_compute_loss_for_data_(model, test_dataset)]
-        train_losses += [_compute_loss_for_data_(model, train_dataset)]
-
-        with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-            tfc.summary.scalar('loss', train_losses[-1], step=epoch)
-
-        with test_summary_writer.as_default(), tfc.summary.always_record_summaries():
-            tfc.summary.scalar('loss', test_losses[-1], step=epoch)
-
+        
+        test_reports += [_compute_loss_for_data_(model, test_dataset)]
+        train_reports += [_compute_loss_for_data_(model, train_dataset)]
+        
+        _recorded_scalars_ =  ['loss', 'recon', 'kl']
+        _tf_write_scalars_(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
+        _tf_write_scalars_(test_summary_writer, zip(_recorded_scalars_, test_reports[-1]), step=epoch)
+        
+        with gradients_writer.as_default(), tfc.summary.always_record_summaries():
+            for g, var_name in zip(gradients, [v.name for v in model.trainable_variables]):
+                tfc.summary.histogram(f'gradient_{var_name}', g, step=epoch)
+              
         if epoch % 10 == 0:
-            print(f"Epoch: {epoch:0>3}, train test loss: {test_losses[-1]:0.3f}, took {end_time - start_time:0.3f} sec")
+            print(_progress_str_(epoch, train_reports, test_reports, time=end_time - start_time))
             tfc.summary.flush()
         else:
             # simple "loading bar"
-            print('.' * (epoch % 10), end='\r')
+            print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
 
         epoch += 1
+        
+        #if epoch >= 100:
+        #    warnings.warn('artifical break')
+        #    break
     except KeyboardInterrupt:
         tfc.summary.flush()
-        print(f"Stopped training during epoch {epoch + 1}, current loss: {train_losses[-1]:0.3f}/{test_losses[-1]:0.3f}")
+        print(_progress_str_(epoch, train_reports, test_reports, stopped=True))
         break
+        
+train_reports = np.array(train_reports)
+test_reports = np.array(test_reports)
 
-# <codecell>
-
-plots.plot_losses(train_losses, test_losses, run_config=run_config);
+train_losses = train_reports[:, 0]
+test_losses = test_reports[:, 0]
 
 # <markdowncell>
 
@@ -777,15 +829,16 @@ plots.plot_losses(train_losses, test_losses, run_config=run_config);
 # <codecell>
 
 def _reverse_to_original_shape_(X):
+    rescaled = scaler.inverse_transform(X)
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        input_shape = (15, -1)
+        return rescaled.reshape(-1, 15, 2)
     else:
-        input_shape = X.shape[1:]
-        
-    return scaler.inverse_transform(X).reshape(X.shape[0], *(input_shape))
+        return rescaled
 
 # <codecell>
 
+exp_desc = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)})
+exp_desc_short = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)}, short=True)
 input_data_raw = np.vstack((data_train, data_test))
 
 if run_config['use_time_series']:
@@ -793,15 +846,33 @@ if run_config['use_time_series']:
 else:
     input_data = _reverse_to_original_shape_(input_data_raw)
     
-reconstructed_data = np.tanh(_reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()))
-_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
-generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))
+if run_config['use_time_series']:
+    reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[:, -1, :])
+else:
+    reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy())
+    
+_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size'] / run_config['time_series_length']))
+generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))[:len(reconstructed_data)]
+
+# <codecell>
+
+for a, n in zip(range(train_reports.shape[1]), _recorded_scalars_):
+    plt.subplot(train_reports.shape[1], 1, a + 1)
+    plt.plot(train_reports[:, a], label=f"train_{n}")
+    plt.plot(test_reports[:, a], label=f"test_{n}")
+    plt.title(n)
+    
+plt.tight_layout()
+plt.legend()
+
+# <codecell>
+
+plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
 
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data,
-                                                                 validation_cut_off=len(data_train), run_config=run_config, epochs=len(train_losses));
+    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data, validation_cut_off=len(data_train), exp_desc=exp_desc);
 else:
     fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
     start = 100
@@ -810,21 +881,22 @@ else:
     for i, c in enumerate(selected_cols):
         _idx_ = np.s_[start:end, i]
         axs[i][0].plot(xticks, input_data[_idx_])
-        axs[i][1].plot(xticks, generated_data[_idx_])
-        axs[i][2].plot(xticks, reconstructed_data[_idx_])
+        axs[i][1].plot(xticks, reconstructed_data[_idx_])
+        axs[i][2].plot(xticks, generated_data[_idx_])
         
         #for a in axs[i]:
         #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
 
     axs[0][0].set_title('input')
-    axs[0][1].set_title('generated')
-    axs[0][2].set_title('reconstructed')
+    axs[0][1].set_title('reconstructed')
+    axs[0][2].set_title('generated')
     for i in range(3):
         axs[-1][i].set_xlabel('time step')
     
-    plt.suptitle(f"Comparision of selection of data")
+    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
     
-    #plt.tight_layout()
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.94)
     #plt.savefig(f"./figures/{_CONFIG_HASH_}_input_gen_recon_comparision.png")
 
 # <codecell>
@@ -840,6 +912,10 @@ print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/ge
 # <codecell>
 
 from hdbscan import HDBSCAN
+
+# <codecell>
+
+X_latent.mean.shape
 
 # <codecell>
 
@@ -905,11 +981,17 @@ def video_prep_recon_data(input_data):
 
 # <codecell>
 
-p = video.comparision_video_of_reconstruction([video_prep_raw_data(_all_input_), video_prep_recon_data(_all_input_)],
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    _positional_data_ = [reverse_pos_pipeline(input_data), reverse_pos_pipeline(reconstructed_data)]
+else:
+    raise NotImplementedError('give me a break')
+    
+p = video.comparision_video_of_reconstruction(_positional_data_,
                                               images_paths_for_experiments=images_paths_for_experiments, 
                                               n_train=len(data_train),
                                               cluster_assignments=cluster_assignments,
-                                              as_frames=False)
+                                              as_frames=False,
+                                              exp_desc=exp_desc_short)
 
 display_video(p)
 
@@ -917,22 +999,23 @@ display_video(p)
 
 from collections import OrderedDict
 _N_CLUSTER_TO_VIZ_ = 10
-_positional_data = [video_prep_raw_data(_all_input_), video_prep_recon_data(_all_input_)]
 _t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
 _t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
 
 cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
 
-cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data,
+cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_positional_data_,
                                                                       cluster_assignments=cluster_assignments,
                                                                       images_paths_for_experiments=images_paths_for_experiments,
                                                                       n_train=data_train.shape[0],
                                                                       cluster_colors=cluster_colors,
-                                                                      cluster_id_to_visualize=p[1]))
+                                                                      cluster_id_to_visualize=p[1], exp_desc=exp_desc))
                     for p in _t[:_N_CLUSTER_TO_VIZ_])
 
 print('cluster_vids: ', cluster_vids.keys())
 
 # <codecell>
 
-display_video(list(cluster_vids.values())[0])
+c_idx = 0
+#c_idx += 1
+display_video(list(cluster_vids.values())[c_idx])
