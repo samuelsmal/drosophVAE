@@ -257,17 +257,30 @@ def plot_2d_distribution(X_train, X_test, n_legs=3, exp_desc=None):
 @save_figure
 def plot_distribution_of_angle_data(data, run_config):
     """
-    data is should be a list of lists (on list for each experiment)
+    Args:
+    =====
+
+        data: [(exp_id, exp_data)]
+        run_config: the full run_config (used to fill in the title)
     """
+    # it's highly unlikely that the selection will change
+    selected_cols = np.where(np.var(data[0][1], axis=0) > 0.0)[0]
+    column_names = get_3d_columns_names(selected_cols)
+
+    def _get_limb_id(s):
+        return int(s[len('limb: '):len('limb: x')])
+
+    t = np.unique(np.array([_get_limb_id(s) for s in column_names]))
+    col_name_to_ax = dict(zip(t, np.arange(len(t))))
+
     # This will take some time... you can set `sharey=False` to speed it up.
-    fig, axs = plt.subplots(nrows=len(data), ncols=3, figsize=(20, len(data) // 2))
+    fig, axs = plt.subplots(nrows=len(data), ncols=len(col_name_to_ax), figsize=(20, len(data)), sharey=False, sharex=True)
 
-    for i, data_set in enumerate(data):
-        selected_cols = np.where(np.var(data_set, axis=0) > 0.0)[0]
-        column_names = get_3d_columns_names(selected_cols)
+    for i, (exp_id, data_set) in enumerate(data):
+        for s, cn, ax_idx in zip(selected_cols, column_names, [col_name_to_ax[_get_limb_id(s)] for s in column_names]):
+            sns.distplot(data_set[:, s], label=cn, ax=axs[i][ax_idx])
 
-        for s, cn in zip(selected_cols, column_names):
-            sns.distplot(data_set[:, s], label=cn, ax=axs[i][int(cn[len('limb: '):len('limb: 0')])])
+        axs[i][0].set_ylabel(exp_id, rotation=0)
 
 
     plt.suptitle(f"distribution of angled data\n({config.config_description(run_config)})")
@@ -282,7 +295,7 @@ def plot_distribution_of_angle_data(data, run_config):
 
 @save_figure
 def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, exp_desc):
-    fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6))
+    fig, axs = plt.subplots(nrows=X_train.shape[-1] // 3, ncols=2, figsize=(10, 6), sharex=True, sharey=True)
     col_names = get_3d_columns_names(selected_columns)
 
     for c in range(X_train.shape[-1]):

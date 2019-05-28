@@ -10,6 +10,7 @@ import numpy as np
 from som_vae.settings import config, skeleton
 
 def _load_positional_data_(path):
+    raise DeprecationWarning
     with open(path, 'rb') as f:
         pose_data_raw = pickle.load(f)
         return pose_data_raw['points2d']
@@ -51,6 +52,7 @@ def _get_visible_legs_(joint_positions, camera_idx=config.CAMERA_OF_INTEREST):
 
 
 def get_positional_data(path):
+    raise DeprecationWarning('use `get_data_and_normalization`')
     fns = [_load_positional_data_, _simple_checks_, _get_camera_of_interest_, _get_visible_legs_]
     return reduce(lambda acc, el: el(acc), fns, path)
 
@@ -100,20 +102,35 @@ def normalize_pose(points3d, median3d=False):
     return points3d
 
 
-def get_data_and_normalization(data, per_experiment=False):
-    ret = seq(data).map(partial(config.positional_data))\
-                    .filter(lambda x: x is not None)\
-                    .map(_simple_checks_)\
-                    .map(_get_camera_of_interest_)\
-                    .map(_get_visible_legs_)\
-                    .map(add_third_dimension)\
-                    .map(get_only_first_legs)\
-                    .to_list()
+def get_data_and_normalization(data, normalize=False, dimensions='2d', return_with_experiment_id=False):
+    if normalize and return_with_experiment_id:
+        raise ValueError('choose one')
 
-    if per_experiment:
-        return ret
+    ret = seq(data).map(partial(config.positional_data,
+                                dimensions=dimensions,
+                                return_experiment_id=return_with_experiment_id))\
+                   .filter(lambda x: x is not None)\
+
+    if return_with_experiment_id:
+        exp_ids, ret = zip(*ret.to_list())
+        ret = seq(ret)
+
+    if dimensions == '2d':
+        ret = ret.map(_simple_checks_)\
+                 .map(_get_camera_of_interest_)\
+                 .map(_get_visible_legs_)\
+                 .map(add_third_dimension)\
+                 .map(get_only_first_legs)
+
+    if normalize:
+        ret = normalize(np.vstack(ret.to_list()))
     else:
-        return normalize(np.vstack(ret))
+        ret = ret.to_list()
+
+    if return_with_experiment_id:
+        return list(zip(exp_ids, ret))
+    else:
+        return ret
 
 
 def get_frames_with_idx_and_labels(data):

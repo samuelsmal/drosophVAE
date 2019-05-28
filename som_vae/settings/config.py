@@ -59,7 +59,13 @@ def full_experiment_id(study_id=STUDY_ID, experiment_id=EXPERIMENT_ID, fly_id=FL
     return f"{study_id}-{experiment_id}-{fly_id}"
 
 
-def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=__EXPERIMENT_ROOT__):
+def get_experiment_id(experiment):
+    return full_experiment_id(study_id=experiment.study_id,
+                              experiment_id=experiment.experiment_id,
+                              fly_id=experiment.fly_id)
+
+
+def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=__EXPERIMENT_ROOT__, return_experiment_id=False):
     """
     Returns the positional data for the given experiment.
 
@@ -84,14 +90,22 @@ def positional_data(experiment, dimensions='2d', pattern='pose_result', base_pat
     pos_data_path = PATH_EXPERIMENT_POSITIONAL_DATA.format(base_experiment_path=base)
 
     try:
-        pose = [p for p in pathlib.Path(pos_data_path).iterdir()
-                if pattern in p.name][0]
-    except (IndexError, FileNotFoundError) as e:
-        print(f"huh?? something odd with {experiment}: {pathlib.Path(pos_data_path)}")
+        pose = [p for p in pathlib.Path(pos_data_path).iterdir() if pattern in p.name]
+
+        if len(pose) == 0:
+            raise FileNotFoundError('Could not find the pose data file')
+        else:
+            pose = pose[0]
+    except FileNotFoundError as e:
+        print(f"huh?? something odd with {experiment.key}: {pathlib.Path(pos_data_path)}: {e}")
         return None
 
     with open(pose, 'rb') as f:
-        return pickle.load(f)[f'points{dimensions}']
+        data = pickle.load(f)[f'points{dimensions}']
+        if return_experiment_id:
+            return experiment.key, data
+        else:
+            return data
 
 
 def images_paths(experiment, camera_id=CAMERA_OF_INTEREST):
@@ -133,6 +147,9 @@ def config_description(config, short=False):
         ("n_clayers", "ncl", config['n_conv_layers']),
         ("latent_dim", "ld", config['latent_dim']),
         ("multiple_flys", "mf", _bool_('use_all_experiments')),
+        ("optimizer", "opt", config.get('optimizer')),
+        ("loss_weight_recon", "lwr", config.get('loss_weight_reconstruction')),
+        ("loss_weight_kl", "lwkl", config.get('loss_weight_kl')),
     ]
 
     descr_idx = 1 if short else 0
@@ -151,7 +168,7 @@ def model_config_description(config, short=False):
     valus_of_interest = [
         ("epochs", "e", config['epochs']),
         ("loss_weight_recon", "lwr", config['loss_weight_reconstruction']),
-        ("loss_weight_kl", "lwkl", config['loss_weight_kl']), 
+        ("loss_weight_kl", "lwkl", config['loss_weight_kl']),
     ]
 
     descr_idx = 1 if short else 0

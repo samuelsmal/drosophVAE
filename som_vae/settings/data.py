@@ -48,10 +48,13 @@ def angle_three_points(a, b, c):
     """
     ba = a - b
     bc = c - b
- 
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-    angle = np.arccos(cosine_angle)
-    return angle
+    denom = (np.linalg.norm(ba) * np.linalg.norm(bc))
+
+    if np.abs(denom) <= 1e-8:
+        raise ValueError('denom too small')
+
+    cosine_angle = np.dot(ba, bc) / denom
+    return np.arccos(cosine_angle)
 
 
 def convert_3d_to_angle(data):

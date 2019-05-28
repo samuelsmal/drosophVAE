@@ -42,6 +42,7 @@ tfk = tf.keras
 tfkl = tf.keras.layers
 
 from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+import som_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
@@ -78,6 +79,9 @@ print(f"this is the main experiment, study, and fly id: {config.full_experiment_
 # <codecell>
 
 _EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
+_FLY_BLACK_LIST_ = ['180920_aDN_PR-Fly2-005_SG1', '180921_aDN_CsCh-Fly6-003_SG1'] # for those flys the angle conversion give odd results,
+                                                                                  # and their distributions seem way off compared to the others)
+
 
 _DATA_TYPE_3D_ANGLE_ = '3d_angle'
 _DATA_TYPE_2D_POS_ = '2d_pos'
@@ -88,14 +92,16 @@ run_config = {
     'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
     'd_sinoid_data': True, 
     'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
-    'use_all_experiments': False,
-    'data_type': _DATA_TYPE_2D_POS_,
+    'use_all_experiments': True,
+    'data_type': _DATA_TYPE_3D_ANGLE_,
     'use_time_series': True,       # triggers time series application, without this the model is only dense layers
     'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'latent_dim': 8,               # should be adapted given the input dim
-    'batch_size': 100
+    'latent_dim': None,               # should be adapted given the input dim
+    'batch_size': 100,
+    'loss_weight_reconstruction': 1.0, # will be adjusted further down (currently)
+    'loss_weight_kl': 0.0              # will be adjusted further down (currently)
 }
 
 # And now the ... ugly parts begin. -> TODO put this in a class, 
@@ -112,6 +118,15 @@ if run_config['n_conv_layers'] is None:
 
 if run_config['conv_layer_kernel_size'] is None:
     raise NotImplementedError('ups')
+    
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    # goes from 15 * 2 = 30 -> 8
+    run_config['latent_dim'] = 8
+elif run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
+    # goes from 18 -> 4
+    run_config['latent_dim'] = 4
+else:
+    raise ValueError(f"this data_type is not supported: {run_config['data_type']}")
 
 # <markdowncell>
 
@@ -137,11 +152,10 @@ if not run_config['use_all_experiments']:
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     if run_config['use_all_experiments']:
-        all_experiments = experiments_from_root()
-        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments)
+        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
+        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize=True)
     else:
-        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
-
+        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize=True)
 
         images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
                                                .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
@@ -183,7 +197,7 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_e
     #
     # column selection 
     #
-    threshold = 0
+    threshold = 0.
     selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
     
     angled_data_columns = SD.get_3d_columns_names(selected_cols)
@@ -197,14 +211,23 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_e
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_experiments']:
-    all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_]
-    angle_data = [SD.convert_3d_to_angle(d) for d in preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)]
+    all_experiments = [e for e in experiments_from_root() if (e.study_id not in _EXPERIMENT_BLACK_LIST_) and (e.key not in _FLY_BLACK_LIST_)]
+    # `per_experiment` is a shitty parameter name, the data is not normalised and return per experiment.
+    loading_kwargs = {'dimensions': '3d', 'return_with_experiment_id': True}
+    angle_data_raw = [(exp_id, SD.convert_3d_to_angle(d)) for exp_id, d in preprocessing.get_data_and_normalization(all_experiments, **loading_kwargs)]
 
-    plots.plot_distribution_of_angle_data(angle_data);
+    # takes for ever to render, if you want to see this, please run it yourself
+    #plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
 
+    exp_ids, angle_data  = zip(*angle_data_raw)
     angle_data = np.vstack(angle_data)
-    selected_columns = np.where(np.var(angle_data, axis=0) > 0.0)[0]
-    joint_positions = angle_data_all[:, selected_columns]
+    selected_col= np.where(np.var(angle_data, axis=0) > 0.0)[0]
+    joint_positions = angle_data[:, selected_col]
+
+# <codecell>
+
+reload(plots)
+plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
 
 # <codecell>
 
@@ -244,6 +267,10 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 #for i, l in enumerate(experiment_lengths):
 #    plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
 #    used_until += l
+
+# <codecell>
+
+joint_positions.shape
 
 # <markdowncell>
 
@@ -673,6 +700,8 @@ def compute_loss(model, x, detailed=False):
     p = tfp.distributions.Normal(loc=0., scale=1.)
     q = tfp.distributions.Normal(loc=mean, scale=logvar)
     kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q))
+    kl = tf.clip_by_value(kl, 0., 1.)
+
     loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
     
     if detailed:
@@ -694,7 +723,6 @@ def compute_gradients(model, x):
         loss = compute_loss(model, x) 
         return tape.gradient(loss, model.trainable_variables), loss
 
-optimizer = tf.train.AdamOptimizer(1e-4)
 def apply_gradients(optimizer, gradients, variables, global_step=None):
     # TODO try out gradient clipping
     #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
@@ -716,13 +744,16 @@ tf.reset_default_graph()
 test_reports = []
 train_reports = []
 
+run_config['loss_weight_reconstruction'] = 1.0
+run_config['loss_weight_kl'] = 0. # 1e-3
+
 model = DrosophVAE(latent_dim, 
                    input_shape=data_train.shape[1:], 
                    batch_size=run_config['batch_size'], 
                    n_layers=run_config['n_conv_layers'], 
                    dropout_rate_temporal=0.2,
-                   loss_weight_reconstruction=1.0,
-                   loss_weight_kl=0.)
+                   loss_weight_reconstruction=run_config['loss_weight_reconstruction'],
+                   loss_weight_kl=run_config['loss_weight_kl'])
 
 if run_config['use_time_series']:
     model.temporal_conv_net.summary()
@@ -730,11 +761,14 @@ if run_config['use_time_series']:
 model.inference_net.summary()
 model.generative_net.summary()
 
+optimizer = tf.train.AdamOptimizer(1e-4)
+#optimizer = tf.train.AdadeltaOptimizer(1e-4)
+run_config['optimizer'] = optimizer._name
 _config_hash_ = config.get_config_hash(run_config)
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config)}_{_config_hash_}"
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config, short=True)}_{_config_hash_}"
 train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
 test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
-gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
+#gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
 
 # <codecell>
 
@@ -792,11 +826,11 @@ while True:
         train_reports += [_compute_loss_for_data_(model, train_dataset)]
         
         _recorded_scalars_ =  ['loss', 'recon', 'kl']
-        _tf_write_scalars_(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
-        _tf_write_scalars_(test_summary_writer, zip(_recorded_scalars_, test_reports[-1]), step=epoch)
+        tf_helpers.tf_write_scalars(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
+        tf_helpers.tf_write_scalars(test_summary_writer, zip(_recorded_scalars_, test_reports[-1]), step=epoch)
         
-        with gradients_writer.as_default(), tfc.summary.always_record_summaries():
-            for g, var_name in zip(gradients, [v.name for v in model.trainable_variables]):
+        with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
+            for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.trainable_variables]):
                 tfc.summary.histogram(f'gradient_{var_name}', g, step=epoch)
               
         if epoch % 10 == 0:
@@ -867,7 +901,7 @@ plt.legend()
 
 # <codecell>
 
-plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
+#plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
 
 # <codecell>
 
@@ -899,12 +933,6 @@ else:
     plt.subplots_adjust(top=0.94)
     #plt.savefig(f"./figures/{_CONFIG_HASH_}_input_gen_recon_comparision.png")
 
-# <codecell>
-
-_mean_recon_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(reconstructed_data, axis=1)))
-_mean_gen_ = np.mean(np.abs(np.mean(input_data, axis=1) - np.mean(generated_data[:len(input_data)], axis=1)))
-print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/gen: {_mean_gen_:0.4f}. mse (input/recon): {((input_data - reconstructed_data) ** 2).mean()}")
-
 # <markdowncell>
 
 # # Latent space
@@ -912,10 +940,6 @@ print(f"mean(abs(mean(x) - mean(y))): input/recon: {_mean_recon_:0.4f}; input/ge
 # <codecell>
 
 from hdbscan import HDBSCAN
-
-# <codecell>
-
-X_latent.mean.shape
 
 # <codecell>
 
