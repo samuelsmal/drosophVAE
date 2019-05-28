@@ -37,9 +37,11 @@ import tensorflow_probability as tfp
 tfe = tf.contrib.eager
 tfc = tf.contrib
 tf.enable_eager_execution()
-
+tfe.seterr(inf_or_nan='raise')
 tfk = tf.keras
 tfkl = tf.keras.layers
+
+warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
 
 from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 import som_vae.helpers.tensorflow as tf_helpers
@@ -221,8 +223,8 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
     exp_ids, angle_data  = zip(*angle_data_raw)
     angle_data = np.vstack(angle_data)
-    selected_col= np.where(np.var(angle_data, axis=0) > 0.0)[0]
-    joint_positions = angle_data[:, selected_col]
+    selected_cols = np.where(np.var(angle_data, axis=0) > 0.0)[0]
+    joint_positions = angle_data[:, selected_cols]
 
 # <codecell>
 
@@ -682,7 +684,16 @@ def log_normal_pdf(sample, mean, logvar, raxis=1):
     log2pi = tf.log(2. * np.pi)
     return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
 
-def compute_loss(model, x, detailed=False):
+def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
+    """
+    Args:
+    
+        model          the model
+        x              the data
+        detailed       set to true if you want the losses to be returned as well
+        kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
+                       value was found empirically 
+    """
     mean, logvar = model.encode(x)
     z = model.reparameterize(mean, logvar)
     x_logit = model.decode(z)
@@ -697,12 +708,15 @@ def compute_loss(model, x, detailed=False):
 
     recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
     
-    p = tfp.distributions.Normal(loc=0., scale=1.)
-    q = tfp.distributions.Normal(loc=mean, scale=logvar)
-    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q))
+    p = tfp.distributions.Normal(loc=tf.zeros_like(mean), scale=tf.ones_like(logvar))
+    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=logvar + tf.constant(kl_nan_offset))
+    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
     kl = tf.clip_by_value(kl, 0., 1.)
-
-    loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
+    
+    if model._loss_weight_kl == 0.:
+        loss = model._loss_weight_reconstruction*recon_loss 
+    else:
+        loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
     
     if detailed:
         return loss, recon_loss, kl
@@ -805,11 +819,6 @@ def _progress_str_(epoch, train_reports, test_reports, time=None, stopped=False)
         
     return progress_str
 
-def _tf_write_scalars_(writer, scalars, step):
-    with writer.as_default(), tfc.summary.always_record_summaries():
-        for n, v in scalars:
-            tfc.summary.scalar(n, v, step=step)
-    
 
 print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_config_hash_}")
 print(f"will train for ever...")
@@ -855,6 +864,69 @@ test_reports = np.array(test_reports)
 
 train_losses = train_reports[:, 0]
 test_losses = test_reports[:, 0]
+
+#warnings.filterwarnings("ignore",category=FutureWarning)
+
+# <codecell>
+
+x = train_x
+mean, logvar = model.encode(x)
+z = model.reparameterize(mean, logvar)
+x_logit = model.decode(z)
+
+#if run_config['use_time_series']:
+#    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
+#    # this works on classification data (or binary data)
+#    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
+#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
+#else:
+#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+
+recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+
+offset = 1.
+while True:
+    print(offset)
+    p = tfp.distributions.Normal(loc=tf.zeros_like(mean), scale=tf.ones_like(logvar))
+    q = tfp.distributions.Normal(loc=mean + tf.constant(offset), scale=logvar + tf.constant(offset))
+    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
+    
+    offset /= 10
+
+# <codecell>
+
+np.isnan(logvar.numpy()).sum()
+
+# <codecell>
+
+np.isnan(mean.numpy()).sum()
+
+# <codecell>
+
+
+p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(1e-8), scale=tf.ones_like(logvar) + tf.constant(1e-8))
+q = tfp.distributions.Normal(loc=mean, scale=logvar)
+
+# <codecell>
+
+
+
+# <codecell>
+
+def kl_divergence(p, q):
+    return tf.reduce_sum(p * tf.log(p/q))
+
+# <codecell>
+
+tfp.distributions.kl_divergence(q, q, allow_nan_stats=False)
+
+# <codecell>
+
+
+
+# <codecell>
+
+
 
 # <markdowncell>
 
