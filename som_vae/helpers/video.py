@@ -247,12 +247,14 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
 
     frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
                        experiment[0], experiment_path=experiment[1])
-              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
-                                                                  cluster_assignments[cluster_assignment_idx],
-                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx])))
+              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(
+                  cluster_assignment_idx,
+                  cluster_assignments[cluster_assignment_idx],
+                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))
+              if pathlib.Path(experiment[1]).is_file())
 
     if as_frames:
-        return frames
+        return frames, cluster_assignment_idx
     else:
         output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
         _save_frames_(output_path, frames, format='mp4')
@@ -309,5 +311,89 @@ def combine_images_h(img1, img2):
     #cv2.imshow("test", vis)
 
 
+# This can probably be removed... and should
 _BEHAVIOR_COLORS_ = dict(zip(list(data._BehaviorLabel_),
                              _float_to_int_color_(sns.color_palette(n_colors=len(data._BehaviorLabel_)))))
+
+
+def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None, exp_desc=None, as_frames=False):
+    """
+    exp_desc refers to the model experimnt id, not fly-experiment
+
+
+    ... in general stuff in here sucks... big time...
+    """
+    if cluster_id_to_visualize is None:
+        cluster_assignment_idx = list(range(len(cluster_assignments)))
+    else:
+        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
+
+    text_default_args = {
+        "fontFace": 1,
+        "fontScale": 1,
+        "thickness": 1,
+    }
+
+    cluster_ids = np.unique(cluster_assignments)
+    if cluster_colors is None:
+        cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+
+    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
+    lines_pos = ((np.array(range(len(cluster_assignments))) / len(cluster_assignments)) * image_width).astype(np.int)[cluster_assignment_idx].tolist()
+
+    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment, experiment_path=None):
+        # frame_nb is the number of the frame shown, continuous
+        # frame_id is the id of the order of the frame,
+        # e.g. frame_nb: [0, 1, 2, 3], frame_id: [123, 222, 333, 401]
+        # kinda ugly... note that some variables are from the upper "frame"
+        #f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
+        f = frame
+
+        # experiment id
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=data._key_(experiment),
+                        org=(0, 20),
+                        color=(255, 255, 255))
+
+        # image id
+        _text_size, _ = cv2.getTextSize(**text_default_args, text=data._key_(experiment))
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=pathlib.Path(experiment_path).stem,
+                        org=(_text_size[0], 20),
+                        color=(255, 255, 255))
+
+        # model experiment description
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=exp_desc,
+                        org=(0, 40),
+                        color=(255, 255, 255))
+
+        # cluster assignment bar
+        for line_idx, l in enumerate(lines_pos):
+            if line_idx == frame_nb:
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
+            else:
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
+
+
+        return f
+
+    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
+                       experiment[0], experiment_path=experiment[1])
+              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(
+                  cluster_assignment_idx, 
+                  cluster_assignments[cluster_assignment_idx],
+                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))
+              if pathlib.Path(experiment[1]).is_file())
+
+    if as_frames:
+        return frames
+    else:
+        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
+        _save_frames_(output_path, frames, format='mp4')
+
+        return output_path
+

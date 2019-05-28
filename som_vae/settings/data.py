@@ -25,6 +25,9 @@ def _key_from_list_(ls):
 def _key_(x:__LabelledData__):
     return f"{x.study_id}-{x.fly_id}-{x.experiment_id}"
 
+def _experiment_from_key_(exp_key):
+    return Experiment(*exp_key.split('-'), exp_key)
+
 
 def _experiment_(x:__LabelledData__):
     return Experiment(x.study_id, x.fly_id, x.experiment_id, _key_(x))

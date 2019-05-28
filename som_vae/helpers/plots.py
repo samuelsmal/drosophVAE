@@ -260,8 +260,8 @@ def plot_distribution_of_angle_data(data, run_config):
     Args:
     =====
 
-        data: [(exp_id, exp_data)]
-        run_config: the full run_config (used to fill in the title)
+        data:           [(exp_id, exp_data)]
+        run_config:     the full run_config (used to fill in the title)
     """
     # it's highly unlikely that the selection will change
     selected_cols = np.where(np.var(data[0][1], axis=0) > 0.0)[0]

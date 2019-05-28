@@ -152,6 +152,7 @@ if not run_config['use_all_experiments']:
 
 # <codecell>
 
+# TODO form a wrapper around the used data, experiments (the ids), data, normalisation factor, images, ... a namedtuple should do the trick
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     if run_config['use_all_experiments']:
         all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
@@ -163,7 +164,6 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
                                                .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
                                                .to_list()
 
-        # TODO form a wrapper around them
         if len(frames_of_interest) != len(joint_positions):
             warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
             frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
@@ -228,7 +228,7 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
 # <codecell>
 
-reload(plots)
+# will generate a huge plot and take about 6min to run...
 plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
 
 # <codecell>
@@ -823,110 +823,52 @@ def _progress_str_(epoch, train_reports, test_reports, time=None, stopped=False)
 print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_config_hash_}")
 print(f"will train for ever...")
 epoch = len(train_reports)
-while True:
-    try:
-        start_time = time.time()
-        for train_x in train_dataset:
-            gradients, loss = compute_gradients(model, train_x)
-            apply_gradients(optimizer, gradients, model.trainable_variables)
-        end_time = time.time()
-        
-        test_reports += [_compute_loss_for_data_(model, test_dataset)]
-        train_reports += [_compute_loss_for_data_(model, train_dataset)]
-        
-        _recorded_scalars_ =  ['loss', 'recon', 'kl']
-        tf_helpers.tf_write_scalars(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
-        tf_helpers.tf_write_scalars(test_summary_writer, zip(_recorded_scalars_, test_reports[-1]), step=epoch)
-        
-        with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-            for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.trainable_variables]):
-                tfc.summary.histogram(f'gradient_{var_name}', g, step=epoch)
-              
-        if epoch % 10 == 0:
-            print(_progress_str_(epoch, train_reports, test_reports, time=end_time - start_time))
-            tfc.summary.flush()
-        else:
-            # simple "loading bar"
-            print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
 
-        epoch += 1
+with warnings.catch_warnings():
+    # pesky tensorflow again
+    warnings.simplefilter(action='ignore', category=FutureWarning)
+    while True:
+        try:
+            start_time = time.time()
+            for train_x in train_dataset:
+                gradients, loss = compute_gradients(model, train_x)
+                apply_gradients(optimizer, gradients, model.trainable_variables)
+            end_time = time.time()
+
+            test_reports += [_compute_loss_for_data_(model, test_dataset)]
+            train_reports += [_compute_loss_for_data_(model, train_dataset)]
+
+            _recorded_scalars_ =  ['loss', 'recon', 'kl']
+            tf_helpers.tf_write_scalars(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
+            tf_helpers.tf_write_scalars(test_summary_writer, zip(_recorded_scalars_, test_reports[-1]), step=epoch)
+
+            with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
+                for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.trainable_variables]):
+                    tfc.summary.histogram(f'gradient_{var_name}', g, step=epoch)
+
+            if epoch % 10 == 0:
+                print(_progress_str_(epoch, train_reports, test_reports, time=end_time - start_time))
+                tfc.summary.flush()
+            else:
+                # simple "loading bar"
+                print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
+
+            epoch += 1
+
+            #if epoch >= 100:
+            #    warnings.warn('artifical break')
+        except KeyboardInterrupt:
+            tfc.summary.flush()
+            print(_progress_str_(epoch, train_reports, test_reports, stopped=True))
+            break
         
-        #if epoch >= 100:
-        #    warnings.warn('artifical break')
-        #    break
-    except KeyboardInterrupt:
-        tfc.summary.flush()
-        print(_progress_str_(epoch, train_reports, test_reports, stopped=True))
-        break
         
+tfc.summary.flush()
 train_reports = np.array(train_reports)
 test_reports = np.array(test_reports)
 
 train_losses = train_reports[:, 0]
 test_losses = test_reports[:, 0]
-
-#warnings.filterwarnings("ignore",category=FutureWarning)
-
-# <codecell>
-
-x = train_x
-mean, logvar = model.encode(x)
-z = model.reparameterize(mean, logvar)
-x_logit = model.decode(z)
-
-#if run_config['use_time_series']:
-#    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
-#    # this works on classification data (or binary data)
-#    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
-#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
-#else:
-#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
-
-recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
-
-offset = 1.
-while True:
-    print(offset)
-    p = tfp.distributions.Normal(loc=tf.zeros_like(mean), scale=tf.ones_like(logvar))
-    q = tfp.distributions.Normal(loc=mean + tf.constant(offset), scale=logvar + tf.constant(offset))
-    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
-    
-    offset /= 10
-
-# <codecell>
-
-np.isnan(logvar.numpy()).sum()
-
-# <codecell>
-
-np.isnan(mean.numpy()).sum()
-
-# <codecell>
-
-
-p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(1e-8), scale=tf.ones_like(logvar) + tf.constant(1e-8))
-q = tfp.distributions.Normal(loc=mean, scale=logvar)
-
-# <codecell>
-
-
-
-# <codecell>
-
-def kl_divergence(p, q):
-    return tf.reduce_sum(p * tf.log(p/q))
-
-# <codecell>
-
-tfp.distributions.kl_divergence(q, q, allow_nan_stats=False)
-
-# <codecell>
-
-
-
-# <codecell>
-
-
 
 # <markdowncell>
 
@@ -948,17 +890,16 @@ exp_desc_short = config.exp_desc(run_config, {**model._config_(), 'epochs': len(
 input_data_raw = np.vstack((data_train, data_test))
 
 if run_config['use_time_series']:
-    input_data = _reverse_to_original_shape_(input_data_raw[:, -1, :])
+    back_to_single_time = np.s_[:, -1, :]
 else:
-    input_data = _reverse_to_original_shape_(input_data_raw)
+    back_to_single_time = np.s_[:]
     
-if run_config['use_time_series']:
-    reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[:, -1, :])
-else:
-    reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy())
+
+input_data = _reverse_to_original_shape_(input_data_raw[back_to_single_time])
+reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[back_to_single_time])
     
 _min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size'] / run_config['time_series_length']))
-generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)]))[:len(reconstructed_data)]
+generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time])[:len(reconstructed_data)]
 
 # <codecell>
 
@@ -980,25 +921,26 @@ plt.legend()
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data, validation_cut_off=len(data_train), exp_desc=exp_desc);
 else:
-    fig, axs = plt.subplots(nrows=len(selected_cols), ncols=3, figsize=(30, 20), sharex=True, sharey=True)
+    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
+    fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
     start = 100
-    end = 300
+    end = 1000
     xticks = np.arange(start, end)
-    for i, c in enumerate(selected_cols):
+    for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
         _idx_ = np.s_[start:end, i]
-        axs[i][0].plot(xticks, input_data[_idx_])
-        axs[i][1].plot(xticks, reconstructed_data[_idx_])
-        axs[i][2].plot(xticks, generated_data[_idx_])
+        axs[i].plot(xticks, input_data[_idx_], label='input')
+        axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
+        #axs[i].plot(xticks, generated_data[_idx_], label='generated')
+        
+        axs[i].set_title(cn)
         
         #for a in axs[i]:
         #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
 
-    axs[0][0].set_title('input')
-    axs[0][1].set_title('reconstructed')
-    axs[0][2].set_title('generated')
-    for i in range(3):
-        axs[-1][i].set_xlabel('time step')
+    axs[-1].set_xlabel('time step')
+    axs[0].legend(loc='upper left')
     
+    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
     
     plt.tight_layout()
@@ -1022,9 +964,9 @@ LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 warnings.warn('should use all data `input_data`')
 if run_config['use_all_experiments']:
-    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
+    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
 else:
-    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
+    X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw)))
     
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
@@ -1062,9 +1004,9 @@ ax3.set_title('var');
 
 # <codecell>
 
-def reverse_pos_pipeline(x, normalisation_term=normalisation_factors):
+def reverse_pos_pipeline(x, normalisation_factors):
     """TODO This is again pretty shitty... ultra hidden global variable"""
-    return x + normalisation_term[:x.shape[-1]]
+    return x + normalisation_factors[:x.shape[-1]]
 
 def video_prep_raw_data(data):
     if run_config['use_time_series']:
@@ -1078,7 +1020,7 @@ def video_prep_recon_data(input_data):
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    _positional_data_ = [reverse_pos_pipeline(input_data), reverse_pos_pipeline(reconstructed_data)]
+    _positional_data_ = [reverse_pos_pipeline(input_data), reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
 else:
     raise NotImplementedError('give me a break')
     
@@ -1090,6 +1032,74 @@ p = video.comparision_video_of_reconstruction(_positional_data_,
                                               exp_desc=exp_desc_short)
 
 display_video(p)
+
+# <codecell>
+
+# Super ugly... but necessary...
+# first there is the time offset due to the slicing
+# then there is the concatenation of the data...
+
+angle_data_pos_to_frame = []
+
+for exp_key, data in angle_data_raw: 
+    _exp = SD._experiment_from_key_(exp_key)
+    
+    if len(angle_data_pos_to_frame) == 0:
+        _idx = np.arange(data.shape[0])[run_config['time_series_length'] - 1:]
+    else:
+        _idx = np.arange(data.shape[0])# + len(angle_data_pos_to_frame)
+        
+    angle_data_pos_to_frame += [(_exp, d) for d in _idx]
+
+# <codecell>
+
+        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+                                               .to_list()
+
+# <codecell>
+
+
+    frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
+    frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
+
+# <codecell>
+
+images_paths_for_experiments = [(exp, config.get_path_for_image(exp, i)) for exp, i in angle_data_pos_to_frame]
+
+# <codecell>
+
+images_paths_for_experiments[-10:]
+
+# <codecell>
+
+reload(video)
+from collections import OrderedDict
+_N_CLUSTER_TO_VIZ_ = 10
+_t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
+_t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+
+cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+
+cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(input_data,
+                                                                            cluster_assignments=cluster_assignments,
+                                                                            images_paths_for_experiments=images_paths_for_experiments,
+                                                                            n_train=data_train.shape[0],
+                                                                            cluster_colors=cluster_colors,
+                                                                            cluster_id_to_visualize=p[1], 
+                                                                            exp_desc=exp_desc_short,
+                                                                            is_2d=False))
+                    for p in _t[:_N_CLUSTER_TO_VIZ_])
+
+print('cluster_vids: ', cluster_vids.keys())
+
+# <codecell>
+
+! cat ./som_vae/helpers/video.py
+
+# <codecell>
+
+
 
 # <codecell>
 
@@ -1105,7 +1115,7 @@ cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_pos
                                                                       images_paths_for_experiments=images_paths_for_experiments,
                                                                       n_train=data_train.shape[0],
                                                                       cluster_colors=cluster_colors,
-                                                                      cluster_id_to_visualize=p[1], exp_desc=exp_desc))
+                                                                      cluster_id_to_visualize=p[1], exp_desc=exp_desc_short))
                     for p in _t[:_N_CLUSTER_TO_VIZ_])
 
 print('cluster_vids: ', cluster_vids.keys())
@@ -1115,3 +1125,238 @@ print('cluster_vids: ', cluster_vids.keys())
 c_idx = 0
 #c_idx += 1
 display_video(list(cluster_vids.values())[c_idx])
+
+# <codecell>
+
+images_paths_for_experiments
+
+# <codecell>
+
+len(np.where(cluster_assignments == 11)[0])
+
+# <codecell>
+
+np.array(images_paths_for_experiments)
+
+# <codecell>
+
+for fs, c in _t:
+    print(f"cluster {c} has {len(fs)} elements")
+
+# <codecell>
+
+reload(video)
+
+_t = [(misc.flatten(sequences), cluster_id) for cluster_id, sequences in video.group_by_cluster(cluster_assignments).items()]
+_t = sorted(_t, key=lambda x: len(x[0]), reverse=True)
+p = video.video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=_t[3][1], exp_desc=exp_desc_short)
+
+# <codecell>
+
+display_video(p)
+
+# <codecell>
+
+
+
+# <codecell>
+
+
+
+# <codecell>
+
+video.group_by_cluster(cluster_assignments)
+
+# <codecell>
+
+cluster_assignments[:100]
+
+# <codecell>
+
+from itertools import groupby
+import pathlib
+import logging
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import matplotlib.colors as mc
+import imageio
+import colorsys
+import seaborn as sns
+
+
+def group_by_cluster(data):
+    """Returns the lengths of sequences.
+    Example: AABAAAA -> [[0, 1], [2], [3, 4, 5], [6, 7]]
+
+    """
+    sequences = []
+    cur_embedding_idx = 0
+    cur_seq = [0]
+    for i in range(len(data))[1:]:
+        if data[i] == data[cur_embedding_idx]:
+            cur_seq += [i]
+        else:
+            sequences += [(data[cur_embedding_idx], cur_seq)]
+            cur_embedding_idx = i
+            cur_seq = [i]
+
+    sequences += [(data[cur_embedding_idx], cur_seq)]
+
+    return {embedding_id: [el[1] for el in emb_frames] for embedding_id, emb_frames in groupby(sorted(sequences, key=lambda x: x[0]), key=lambda x: x[0])}
+
+
+def get_frame_path(frame_id, path, camera_id):
+    logging.warn('this is needs to be adapted!')
+    return path.format(camera_id=camera_id, frame_id=frame_id)
+
+
+def _save_frames_(file_path, frames, format='mp4', **kwargs):
+    """
+    If format==GIF then fps has to be None, duration should be ~10/60
+    If format==mp4 then duration has to be None, fps should be TODO
+    """
+    if format.lower() == 'gif':
+        _kwargs = {'duration': 10/60}
+    elif format.lower() == 'mp4':
+        _kwargs = {'fps': 24}
+
+    pathlib.Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+    imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
+
+
+def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
+    params = {"org": (0, frame.shape[0] // 2),
+              "fontFace": 1,
+              "fontScale": 2,
+              "color": (255, 255, 255),
+              "thickness": 2}
+
+    if emb_id is not None: 
+        frame = cv2.putText(img=np.copy(frame), text=f"cluster_id: {emb_id:0>3}", **params)
+
+    if frame_id is not None:
+        frame = cv2.putText(img=np.copy(frame), text=f"frame_id: {frame_id:0>4}", **{**params, 'org': (params['org'][0], params['org'][1] + 24)})
+
+    return frame
+
+
+def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=None, exp_desc=None):
+    if cluster_id_to_visualize is None:
+        cluster_assignment_idx = list(range(len(cluster_assignments)))
+    else:
+        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
+
+    text_default_args = {
+        "fontFace": 1,
+        "fontScale": 1,
+        "thickness": 1,
+    }
+
+    cluster_ids = np.unique(cluster_assignments)
+    if cluster_colors is None:
+        cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
+
+    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
+
+    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment, experiment_path=None):
+        # frame_nb is the number of the frame shown, continuous
+        # frame_id is the id of the order of the frame,
+        # e.g. frame_nb: [0, 1, 2, 3], frame_id: [123, 222, 333, 401]
+        # kinda ugly... note that some variables are from the upper "frame"
+        f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
+
+        # experiment id
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=data._key_(experiment),
+                        org=(0, 20),
+                        color=(255, 255, 255))
+
+        # image id
+        _text_size, _ = cv2.getTextSize(**text_default_args, text=data._key_(experiment))
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=pathlib.Path(experiment_path).stem,
+                        org=(_text_size[0], 20),
+                        color=(255, 255, 255))
+
+        # model experiment description
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=exp_desc,
+                        org=(0, 40),
+                        color=(255, 255, 255))
+
+        # cluster assignment bar
+        for line_idx, l in enumerate(lines_pos):
+            if line_idx == frame_nb:
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
+            else:
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
+
+
+        return f
+
+    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
+                       experiment[0], experiment_path=experiment[1])
+              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(cluster_assignment_idx,
+                                                                  cluster_assignments[cluster_assignment_idx],
+                                                                  np.array(images_paths_for_experiments)[cluster_assignment_idx])))
+
+    if as_frames:
+        return frames
+    else:
+        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
+        _save_frames_(output_path, frames, format='mp4')
+
+        return output_path
+
+
+def plot_embedding_assignment(x_id_of_interest, X_embedded, label_assignments):
+    seen_labels = label_assignments['label'].unique()
+    _cs = sns.color_palette(n_colors=len(seen_labels))
+
+    fig = plt.figure(figsize=(10, 10))
+    behaviour_colours = dict(zip(seen_labels, _cs))
+
+    for l, c in behaviour_colours.items():
+        _d = X_embedded[label_assignments['label'] == l]
+        # c=[c] since matplotlib asks for it
+        plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
+
+    #print(x_id_of_interest)
+    _t = label_assignments.iloc[x_id_of_interest]['label']
+    #print(_t)
+    cur_color = behaviour_colours[_t]
+    plt.scatter(X_embedded[x_id_of_interest, 0], X_embedded[x_id_of_interest, 1], c=[cur_color], linewidth=10, edgecolors=[[0, 0, 1]])
+    plt.legend()
+    plt.title('simple t-SNE on latent space')
+
+    # TODO I would like to move the lower part to a different function, not tested if that works
+    # though
+    # If we haven't already shown or saved the plot, then we need to
+    # draw the figure first...
+    fig.canvas.draw()
+    #fig.canvas.draw_idle()
+#
+    ## Now we can save it to a numpy array.
+    #plot_data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)\
+    #              .reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    #
+    #return plot_data
+
+    fig_val = np.array(fig.canvas.renderer._renderer)[:, :, :3]
+    plt.close()
+    return fig_val
+
+def combine_images_h(img1, img2):
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+    vis = np.zeros((max(h1, h2), w1+w2, img1.shape[2]), np.uint8)
+    vis[:h1, :w1, :] = img1
+    vis[:h2, w1:w1+w2, :] = img2
+    #vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+
+    return vis
+    #cv2.imshow("test", vis)
