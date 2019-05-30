@@ -150,6 +150,7 @@ def config_description(config, short=False):
         ("optimizer", "opt", config.get('optimizer')),
         ("loss_weight_recon", "lwr", config.get('loss_weight_reconstruction')),
         ("loss_weight_kl", "lwkl", config.get('loss_weight_kl')),
+        ("model_impl", "mi", config.get('model_impl'))
     ]
 
     descr_idx = 1 if short else 0
