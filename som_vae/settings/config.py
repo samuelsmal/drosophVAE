@@ -150,6 +150,7 @@ def config_description(config, short=False):
         ("optimizer", "opt", config.get('optimizer')),
         ("loss_weight_recon", "lwr", config.get('loss_weight_reconstruction')),
         ("loss_weight_kl", "lwkl", config.get('loss_weight_kl')),
+        ("dropout_rate", "dr", config.get('dropout_rate')),
         ("model_impl", "mi", config.get('model_impl'))
     ]
 

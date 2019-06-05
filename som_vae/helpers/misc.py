@@ -2,11 +2,14 @@ import socket
 from functools import reduce
 import inspect
 
-
 def flatten(listOfLists):
     return reduce(list.__add__, listOfLists, [])
 
 def extract_args(config, function):
+    """filters config for keys that part of function's arguments
+
+    useful if you have functions that take too many arguments.
+    """
     return {k:config[k] for k in inspect.getfullargspec(function).args if k in config}
 
 def chunks(l, n):
@@ -25,3 +28,6 @@ def to_time_series(data, sequence_length):
         if i + sequence_length <= len(data):
             yield data[i:i+sequence_length]
 
+def if_last(ls):
+    for i, x in enumerate(ls):
+        yield i, i + 1 == len(ls), x

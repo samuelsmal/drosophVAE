@@ -41,6 +41,7 @@ tfe.seterr(inf_or_nan='raise')
 tfk = tf.keras
 tfkl = tf.keras.layers
 
+# otherwise TF will print soooo many warnings
 warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
 
 from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
@@ -50,7 +51,7 @@ tf.keras.backend.set_session(sess)
 
 from som_vae import settings
 from som_vae import preprocessing
-from som_vae.helpers.misc import extract_args, chunks, foldl
+from som_vae.helpers.misc import extract_args, chunks, foldl, if_last
 from som_vae.helpers.jupyter import fix_layout, display_video
 from som_vae.settings import config, skeleton
 from som_vae.settings import data as SD
@@ -80,6 +81,14 @@ print(f"this is the main experiment, study, and fly id: {config.full_experiment_
 
 # <codecell>
 
+
+
+# <codecell>
+
+config.positional_data(SD.EXPERIMENTS[0]).shape
+
+# <codecell>
+
 _EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
 _FLY_BLACK_LIST_ = ['180920_aDN_PR-Fly2-005_SG1', '180921_aDN_CsCh-Fly6-003_SG1'] # for those flys the angle conversion give odd results,
                                                                                   # and their distributions seem way off compared to the others)
@@ -93,9 +102,10 @@ _MODEL_IMPL_TEMPORAL_CONV_ = 'temp_conv'
 _MODEL_IMPL_PADD_CONV_ = 'padd_conv'
 
 run_config = {
-    'debug': False,                 # general flag for debug mode, triggers all `d_.*`-options.
+    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
     'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
-    'd_sinoid_data': True, 
+    'd_sinoid_data': False, 
+    'd_sinoid_cluster_data': True,
     'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
     'use_all_experiments': False,
     'data_type': _DATA_TYPE_3D_ANGLE_,
@@ -107,6 +117,7 @@ run_config = {
     'batch_size': 100,
     'loss_weight_reconstruction': 1.0, # will be adjusted further down (currently)
     'loss_weight_kl': 0.0,             # will be adjusted further down (currently)
+    'dropout_rate': 0.,
     'model_impl': _MODEL_IMPL_TEMPORAL_CONV_
 }
 
@@ -284,7 +295,37 @@ joint_positions.shape
 
 # <codecell>
 
-reshaped_joint_position.shape
+def dummy_data_complex_sine_like(length):
+    DummyBehaviour = namedtuple('DummyBehaviour', 'type amplitude fraction frequency')
+    _dummy_behaviours_ = [
+        ('sinoid', 1., 0.1, 2),
+        ('flat', 0, 0.2, 0),
+        ('sinoid', 1., 0.2, 3),
+        ('sinoid', 1., 0.1, 5),
+        ('flat', 1., 0.2, 0),
+        ('sinoid', .5, .2, 3)
+    ]
+
+    assert np.array(_dummy_behaviours_)[:, 2].astype(np.float).sum() == 1., "I don't know how to split the time duration with the given fractions"
+
+    _dummy_behaviours_ = [DummyBehaviour(*db) for db in _dummy_behaviours_]
+    
+    cur_idx = 0
+    nb_frames = length
+
+    _new_frames_ = np.zeros(nb_frames)
+
+    for db in _dummy_behaviours_:
+        cur_idx_end = np.int(nb_frames * db.fraction + cur_idx)
+        if db.type == 'sinoid':
+            _new_frames_[cur_idx: cur_idx_end] = db.amplitude * np.sin(np.pi * np.linspace(0, 2, cur_idx_end - cur_idx) * db.frequency)
+        elif db.type == 'flat':
+            for frame in range(cur_idx, cur_idx_end):
+                _new_frames_[frame] = db.amplitude
+
+        cur_idx = cur_idx_end
+        
+    return _new_frames_
 
 # <codecell>
 
@@ -342,11 +383,17 @@ if run_config['debug']:
             _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
                                       for x in range(len(joint_positions))] 
                                      for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
+    elif run_config['d_sinoid_cluster_data']:
+        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+            raise NotImplementedError
+        else:
+            _dummy_data_ = np.zeros_like(joint_positions)
+            for c in range(_dummy_data_.shape[1]):
+                _dummy_data_[:, c] = dummy_data_complex_sine_like(_dummy_data_.shape[0])
             
             
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
         _dummy_data_ = _prep_2d_pos_data_(_dummy_data_)
-        
         
     if run_config['use_time_series']:
         reshaped_joint_position = scaler.fit_transform(_dummy_data_)
@@ -527,10 +574,6 @@ class TemporalBlock(tfkl.Layer):
 #   - https://github.com/tensorflow/tensorflow/blob/r1.13/tensorflow/contrib/eager/python/examples/generative_examples/cvae.ipynb 
 #   - https://www.kaggle.com/hone5com/fraud-detection-with-variational-autoencoder
 
-def if_last(ls):
-    for i, x in enumerate(ls):
-        yield i, i + 1 == len(ls), x
-
 def dense_layers(sizes, activation_fn=tf.nn.leaky_relu, name_prefix=None):
     # no activation in the last layer, because either it is 
     # a) the decoder/generative-layer which will apply a sigmoid activation function itself, or 
@@ -571,16 +614,6 @@ class DrosophVAE(tfk.Model):
         self._layer_sizes_generative = np.linspace(latent_dim, input_shape[-1], 2 * n_layers).astype(np.int).tolist()
         self._conv_layer_kernel_size = conv_layer_kernel_size
         
-        self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape[-1]),
-                                                 *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
-                                                 name='inference_net')
-
-        self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(latent_dim,)),
-                                                  *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
-                                                  name='generative_net')
-        
-        self.temporal_conv_net = None
-        
         if use_wavenet_temporal_layer:
             # Remember that we do diluted convolutions -> The filter size can stay ~ constant. TODO discuss with Semigh
             if filters_conv_layer is None:
@@ -589,20 +622,26 @@ class DrosophVAE(tfk.Model):
             else:
                 self.filters_conv_layer = filters_conv_layer
                 
-            self.temporal_conv_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape),
+            self.temporal_conv_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_temporal_conv_net'),
                                                      *temporal_layers(kernel_size=self._conv_layer_kernel_size, 
                                                                       filter_sizes=self.filters_conv_layer,  
                                                                       dropout=dropout_rate_temporal)],
                                                      name='temporal_conv_net')
             
-            self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape),
-                                                     *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
-                                                     name='inference_net')
-        
-            self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=list(input_shape[:1]) + [latent_dim]),
-                                                      *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
-                                                      name='generative_net')
+            inference_input_shape = input_shape
+            generative_input_shape = list(input_shape[:1]) + [latent_dim]
+        else:
+            self.temporal_conv_net = None
+            inference_input_shape = input_shape[-1]
+            generative_input_shape = (latent_dim, )
             
+        self.inference_net = tfk.Sequential([tfkl.InputLayer(input_shape=inference_input_shape, name='input_inference_net'),
+                                                 *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
+                                                 name='inference_net')
+            
+        self.generative_net = tfk.Sequential([tfkl.InputLayer(input_shape=generative_input_shape, name='input_generative_net'),
+                                                  *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
+                                                  name='generative_net')
     
     def sample(self, eps=None):
         if eps is None:
@@ -783,7 +822,7 @@ class DrosophVAEConv(DrosophVAE):
         self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, n_conv_layers + 1, dtype=np.int)
         
         # TODO add MaxPooling
-        self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape),
+        self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
                                                   *[tfkl.Conv1D(filters=fs, kernel_size=2, padding='valid', name=f"inf_conv_{i}") 
                                                     for i, fs in enumerate(self._layer_sizes_inference)],
                                                   tfkl.Flatten(),
@@ -796,7 +835,7 @@ class DrosophVAEConv(DrosophVAE):
         #                                           tfkl.Dense(input_shape[-1])],
         #                                          name='generative_net')
         
-        self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,)),
+        self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,), name='input_generative_net'),
                                                    tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, self.latent_dim])),
                                                    *[PaddedConv1dTransposed(n_filters=fs) for i, fs
                                                      in enumerate(self._layer_sizes_generative)]],
@@ -856,8 +895,10 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     # Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
     # https://arxiv.org/pdf/1606.00704.pdf
     #  Adversarially Learned Inference
-    #  Vincent Dumoulin1, Ishmael Belghazi1, Ben Poole2Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
-    p = tfp.distributions.Normal(loc=tf.zeros_like(mean), scale=tf.ones_like(logvar))
+    #  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
+    
+    # This small constant offset prevents Nan errors
+    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(logvar) + tf.constant(kl_nan_offset))
     q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=logvar + tf.constant(kl_nan_offset))
     kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
     kl = tf.clip_by_value(kl, 0., 1.)
@@ -865,6 +906,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     if model._loss_weight_kl == 0.:
         loss = model._loss_weight_reconstruction*recon_loss 
     else:
+        # KL loss can be NaN for some data. This is inherit to KL-loss (but the data is probably more to blame)
         loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
     
     if detailed:
@@ -920,7 +962,7 @@ if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
                        input_shape=data_train.shape[1:], 
                        batch_size=run_config['batch_size'], 
                        n_layers=run_config['n_conv_layers'], 
-                       dropout_rate_temporal=0.2,
+                       dropout_rate_temporal=run_config['dropout_rate'],
                        loss_weight_reconstruction=run_config['loss_weight_reconstruction'],
                        loss_weight_kl=run_config['loss_weight_kl'], 
                        use_wavenet_temporal_layer=run_config['use_time_series'])
@@ -948,12 +990,6 @@ _base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_descrip
 train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
 test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
 #gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
-
-# <codecell>
-
-# TODO for later
-#from keras.utils import plot_model
-#plot_model(model)
 
 # <codecell>
 
@@ -1115,37 +1151,6 @@ else:
     plt.subplots_adjust(top=0.94)
     plt.savefig(f"./figures/{exp_desc}_input_gen_recon_comparision.png")
 
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data, validation_cut_off=len(data_train), exp_desc=exp_desc);
-else:
-    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
-    fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-    start = 100
-    end = 1000
-    xticks = np.arange(start, end)
-    for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
-        _idx_ = np.s_[start:end, i]
-        axs[i].plot(xticks, input_data[_idx_], label='input')
-        axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
-        #axs[i].plot(xticks, generated_data[_idx_], label='generated')
-        
-        axs[i].set_title(cn)
-        
-        #for a in axs[i]:
-        #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-
-    axs[-1].set_xlabel('time step')
-    axs[0].legend(loc='upper left')
-    
-    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.94)
-    plt.savefig(f"./figures/{exp_desc}_input_gen_recon_comparision.png")
-
 # <markdowncell>
 
 # # Latent space
@@ -1178,6 +1183,23 @@ X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np
 # <codecell>
 
 cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+
+# <codecell>
+
+def plot_debug(input_data, cluster_assignments):
+    _clusters = np.unique(cluster_assignments)
+    _colors = sns.color_palette(n_colors=len(_clusters))
+    cluster_colors = dict(zip(_clusters, _colors))
+
+    plt.figure(figsize=(10, 8))
+    for cluster_id, segments in video.group_by_cluster(cluster_assignments).items():
+        for s in segments:
+            plt.plot(s, input_data[s], c=cluster_colors[cluster_id])
+
+    plt.title('Input data and cluster assigment using debug data');
+    
+if run_config['debug']:
+    plot_debug(input_data, cluster_assignments)
 
 # <codecell>
 
