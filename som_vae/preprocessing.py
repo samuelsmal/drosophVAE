@@ -102,8 +102,8 @@ def normalize_pose(points3d, median3d=False):
     return points3d
 
 
-def get_data_and_normalization(data, normalize=False, dimensions='2d', return_with_experiment_id=False):
-    if normalize and return_with_experiment_id:
+def get_data_and_normalization(data, normalize_data=False, dimensions='2d', return_with_experiment_id=False):
+    if normalize_data and return_with_experiment_id:
         raise ValueError('choose one')
 
     ret = seq(data).map(partial(config.positional_data,
@@ -122,7 +122,7 @@ def get_data_and_normalization(data, normalize=False, dimensions='2d', return_wi
                  .map(add_third_dimension)\
                  .map(get_only_first_legs)
 
-    if normalize:
+    if normalize_data:
         ret = normalize(np.vstack(ret.to_list()))
     else:
         ret = ret.to_list()

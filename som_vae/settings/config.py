@@ -141,27 +141,29 @@ def config_description(config, short=False):
         return 'T' if config[v] else 'F'
 
     valus_of_interest = [
-        ("data", "", config['data_type']),
-        ("time", "t", _bool_('use_time_series')),
-        ("kernel", "k", config['conv_layer_kernel_size']),
-        ("n_clayers", "ncl", config['n_conv_layers']),
-        ("latent_dim", "ld", config['latent_dim']),
-        ("multiple_flys", "mf", _bool_('use_all_experiments')),
-        ("optimizer", "opt", config.get('optimizer')),
-        ("loss_weight_recon", "lwr", config.get('loss_weight_reconstruction')),
-        ("loss_weight_kl", "lwkl", config.get('loss_weight_kl')),
-        ("dropout_rate", "dr", config.get('dropout_rate')),
-        ("model_impl", "mi", config.get('model_impl'))
+        ('data', '', config['data_type']),
+        ('time', 't', config['time_series_length'] if config['use_time_series'] else 'F'),
+        ('kernel', 'k', config['conv_layer_kernel_size']),
+        ('n_clayers', 'ncl', config['n_conv_layers']),
+        ('latent_dim', 'ld', config['latent_dim']),
+        ('multiple_flys', 'mf', _bool_('use_all_experiments')),
+        ('optimizer', 'opt', config.get('optimizer')),
+        ('loss_weight_recon', 'lwr', config.get('loss_weight_reconstruction')),
+        ('loss_weight_kl', 'lwkl', config.get('loss_weight_kl')),
+        ('dropout_rate', 'dr', config.get('dropout_rate')),
+        ('model_impl', 'mi', config.get('model_impl')),
+        ('with_batch_norm', 'bn', _bool_('with_batch_norm'))
     ]
 
     descr_idx = 1 if short else 0
     descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest[1:]))
 
-    if short:
-        descr_str = valus_of_interest[0][2] + '-' + descr_str
+    descr_str = valus_of_interest[0][2] + '-' + descr_str
 
     if config['debug']:
-        descr_str += ''.join([k for k, v in config.items() if k.startswith('d_') and v])
+        descr_str += '_' + ''.join([k for k, v in config.items() if k.startswith('d_') and v])
+    else:
+        descr_str += '_' + ('all_data' if config['use_all_experiments'] else 'small')
 
     return descr_str
 

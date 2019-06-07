@@ -97,10 +97,9 @@ _SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
 
 _MODEL_IMPL_TEMPORAL_CONV_ = 'temp_conv'
 _MODEL_IMPL_PADD_CONV_ = 'padd_conv'
-_MODEL_IMPL_SKIP_CON_ = 'skip_padd_conv' 
 
 run_config = {
-    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
+    'debug': False,                 # general flag for debug mode, triggers all `d_.*`-options.
     'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
     'd_sinoid_data': False, 
     'd_sinoid_cluster_data': True,
@@ -112,7 +111,7 @@ run_config = {
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
     'latent_dim': None,               # should be adapted given the input dim
-    'batch_size': 128,
+    'batch_size': 100,
     'loss_weight_reconstruction': 1.0, # will be adjusted further down (currently)
     'loss_weight_kl': 0.0,             # will be adjusted further down (currently)
     'dropout_rate': 0.,
@@ -124,7 +123,7 @@ run_config = {
 
 if run_config['use_all_experiments']:
     # takes way too long otherwise
-    run_config['batch_size'] = 1024
+    run_config['batch_size'] = 1000
 
 if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
     raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
@@ -799,7 +798,8 @@ class DrosophVAEConv(DrosophVAE):
     """
     About the Deconvolution: https://datascience.stackexchange.com/questions/6107/what-are-deconvolutional-layers
     """
-    def __init__(self, latent_dim, input_shape, batch_size, n_start_filters=None, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, with_batch_norm=False):
+    def __init__(self, latent_dim, input_shape, batch_size, 
+                 n_conv_layers=None, n_start_filters=None, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, with_batch_norm=False):
         """
         Args:
         -----
@@ -825,23 +825,19 @@ class DrosophVAEConv(DrosophVAE):
         if n_start_filters is None:
             n_start_filters = input_shape[-1]
             
+        if n_conv_layers is None:
+            n_conv_layers = np.int(np.ceil((n_start_filters - latent_dim) / 2 + 1))
+            
         self.latent_dim = latent_dim
-        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=input_shape[-2] -1, dtype=np.int)
+        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=n_conv_layers, dtype=np.int)
         # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
         # the 2 * n_layers is to keep compression speed roughly the same
-        
-        # since the layers grow only one time-step per layer:
-        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
+        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, n_conv_layers + 1, dtype=np.int)
         
         # TODO add MaxPooling
-        self.inference_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
-                                                  *[self._convolutional_layer_(idx=i,
-                                                                               filters=fs,
-                                                                               kernel_size=2,
-                                                                               padding='valid',
-                                                                               name=f"inf_{i}",
-                                                                               activation=tf.nn.leaky_relu) 
-                                                    for i, fs in enumerate(self._layer_sizes_inference)],
+        self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
+                                                  *list(itertools.chain.from_iterable([self._convolutional_layer_(filters=fs, kernel_size=2, padding='valid', name=f"inf_{i}", activation=tf.nn.leaky_relu) 
+                                                    for i, fs in enumerate(self._layer_sizes_inference)])),
                                                   tfkl.Flatten(),
                                                   tfkl.Dense(2 * self.latent_dim)],
                                                  name='inference_net')
@@ -852,20 +848,15 @@ class DrosophVAEConv(DrosophVAE):
         #                                           tfkl.Dense(input_shape[-1])],
         #                                          name='generative_net')
         
-        self.generative_net = tfk.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,), name='input_generative_net'),
-                                              tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, self.latent_dim])),
-                                              *[PaddedConv1dTransposed(n_filters=fs, batch_norm=with_batch_norm, name=f"gen_{i}") for i, fs
-                                                in enumerate(self._layer_sizes_generative)],
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=tf.nn.leaky_relu, name=f"gen_dense_0")), 
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=tf.nn.leaky_relu, name=f"gen_dense_1")), 
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=None, name=f"gen_dense_2"))], 
+        self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,), name='input_generative_net'),
+                                                   tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, self.latent_dim])),
+                                                   *[PaddedConv1dTransposed(n_filters=fs, batch_norm=with_batch_norm, name=f"gen_{i}") for i, fs
+                                                     in enumerate(self._layer_sizes_generative)],
+                                                   tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=None, name=f"gen_dense"))], 
                                                   name='generative_net')
         
-    def _convolutional_layer_(self, idx, **kwargs):
-        return tfk.Sequential([tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_0"}), 
-                               tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_1", 'padding': 'same'}), 
-                                tfkl.BatchNormalization(name=f"conv_block_{idx}_batch_norm")], 
-                              name=f"conv_block_{idx}")
+    def _convolutional_layer_(self, **kwargs):
+        return tfkl.Conv1D(**{**kwargs, "name": f"{kwargs['name']}_conv"}), tfkl.BatchNormalization()
 
 # <codecell>
 
@@ -891,7 +882,7 @@ class DrosophVAESkipConv(DrosophVAE):
         filters_conv_layer      list[int]. filter sizes for conv layers
         """
         # just a dummy init, we are only interested in defining the two nets.
-        super(DrosophVAESkipConv, self).__init__(
+        super(DrosophVAEConv, self).__init__(
             latent_dim=latent_dim,
             input_shape=input_shape,
             batch_size=batch_size,
@@ -908,15 +899,10 @@ class DrosophVAESkipConv(DrosophVAE):
             n_conv_layers = np.int(np.ceil((n_start_filters - latent_dim) / 2 + 1))
             
         self.latent_dim = latent_dim
-        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=input_shape[-2] -1, dtype=np.int)
+        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=n_conv_layers, dtype=np.int)
         # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
         # the 2 * n_layers is to keep compression speed roughly the same
-        
-        # since the layers grow only one time-step per layer:
-        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
-        
-        print(self._layer_sizes_inference)
-        print(self._layer_sizes_generative)
+        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, n_conv_layers + 1, dtype=np.int)
         
         # TODO add MaxPooling
         self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
@@ -925,26 +911,20 @@ class DrosophVAESkipConv(DrosophVAE):
                                                   tfkl.Flatten(),
                                                   tfkl.Dense(2 * self.latent_dim)],
                                                  name='inference_net')
+        # This does not work...
+        #self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(latent_dim,)),
+        #                                           tfkl.Lambda(lambda x: tf.reshape(x, [batch_size, 1, latent_dim]), name='gen_reshaping'),
+        #                                           *[UpsamplingConv(n_filters=fs, name=f"gen_conv_{i}") for i, fs in enumerate(self._layer_sizes_generative)],
+        #                                           tfkl.Dense(input_shape[-1])],
+        #                                          name='generative_net')
         
-        self.generative_net = _skip_connection_model_(input_shape=self.latent_dim, 
-                                                      layer_sizes=self._layer_sizes_generative,
-                                                      output_dim=input_shape[-1],
-                                                      name='generative_net')
-        
-        
-def _skip_connection_model_(input_shape, layer_sizes, output_dim, name):
-    input_layer = tfkl.Input(shape=(input_shape,))
-    x = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, input_shape]))(input_layer)
-
-    for i, fs in enumerate(layer_sizes):
-        x = PaddedConv1dTransposed(n_filters=fs, activation=None)(x)
-        x_skip = tf.reshape(tfkl.Dense(x.shape[-1], activation=None)(input_layer), [-1, 1, x.shape[-1]])
-        x = x + x_skip
-        x = tfkl.Activation(tf.nn.leaky_relu)(x)
-        
-    x = tfkl.TimeDistributed(tfkl.Dense(output_dim, activation=None))(x)
-
-    return tfk.Model(inputs=[input_layer], outputs=[x])
+        self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,), name='input_generative_net'),
+                                                   tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, self.latent_dim])),
+                                                   *[PaddedConv1dTransposed(n_filters=fs) for i, fs
+                                                     in enumerate(self._layer_sizes_generative)],
+                                                   tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=None))
+                                                  ],
+                                                  name='generative_net')
 
 # <codecell>
 
@@ -956,10 +936,6 @@ else:
 # <codecell>
 
 data_test.shape
-
-# <codecell>
-
-
 
 # <codecell>
 
@@ -983,7 +959,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     
         model          the model
         x              the data
-        detailed       set to true if you want the separate losses to be returned as well, basically a debug mode
+        detailed       set to true if you want the losses to be returned as well
         kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
                        value was found empirically 
     """
@@ -991,7 +967,6 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     z = model.reparameterize(mean, logvar)
     x_logit = model.decode(z)
     
-    # old version, were only one time step is being reproduced
     #if run_config['use_time_series']:
     #    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
     #    # this works on classification data (or binary data)
@@ -1000,11 +975,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     #else:
     #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
 
-    # TODO increase weights for the latest construction, exponentially scaled
-    recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
-                                              labels=x, 
-                                              weights=np.exp(np.linspace(0, 1, num=run_config['time_series_length']))\
-                                                        .reshape((1, run_config['time_series_length'], 1)))
+    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
     
     # Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
     # https://arxiv.org/pdf/1606.00704.pdf
@@ -1015,9 +986,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(logvar) + tf.constant(kl_nan_offset))
     q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=logvar + tf.constant(kl_nan_offset))
     kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
-    
-    if not detailed:
-        kl = tf.clip_by_value(kl, 0., 1.)
+    kl = tf.clip_by_value(kl, 0., 1.)
     
     if model._loss_weight_kl == 0.:
         loss = model._loss_weight_reconstruction*recon_loss 
@@ -1069,19 +1038,10 @@ _cur_train_reports = []
 _cur_test_reports  = []
 
 run_config['loss_weight_reconstruction'] = 1.0
-run_config['loss_weight_kl'] = 0.0 # 1e-3
+run_config['loss_weight_kl'] = 0.1 # 1e-3
 
 run_config['model_impl'] = _MODEL_IMPL_PADD_CONV_
 
-print(f"Using model: {run_config['model_impl']}")
-      
-model_config = {'latent_dim': run_config['latent_dim'], 
-                'input_shape': data_train.shape[1:], 
-                'batch_size': run_config['batch_size'], 
-                'loss_weight_reconstruction': run_config['loss_weight_reconstruction'],
-                'loss_weight_kl': run_config['loss_weight_kl'],
-                'with_batch_norm': run_config['with_batch_norm']}
-      
 if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
     model = DrosophVAE(run_config['latent_dim'], 
                        input_shape=data_train.shape[1:], 
@@ -1095,9 +1055,12 @@ if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
     if run_config['use_time_series']:
         model.temporal_conv_net.summary()
 elif run_config['model_impl'] == _MODEL_IMPL_PADD_CONV_:
-    model = DrosophVAEConv(**model_config)
-elif run_config['model_impl'] == _MODEL_IMPL_SKIP_CON_:
-    model = DrosophVAESkipConv(**model_config)
+    model = DrosophVAEConv(run_config['latent_dim'], 
+                           input_shape=data_train.shape[1:], 
+                           batch_size=run_config['batch_size'], 
+                           loss_weight_reconstruction=run_config['loss_weight_reconstruction'],
+                           loss_weight_kl=run_config['loss_weight_kl'],
+                           with_batch_norm=run_config['with_batch_norm'])
 else:
     raise ValueError('not such model')
 
@@ -1109,7 +1072,7 @@ optimizer = tf.train.AdamOptimizer(1e-4)
 #optimizer = tf.train.AdadeltaOptimizer(1e-4)
 run_config['optimizer'] = optimizer._name
 _config_hash_ = config.get_config_hash(run_config)
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/exponential_weight_{config.config_description(run_config, short=True)}_{_config_hash_}"
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config, short=True)}_{_config_hash_}"
 train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
 test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
 #gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
@@ -1249,39 +1212,20 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
     fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data, validation_cut_off=len(data_train), exp_desc=exp_desc);
 else:
     # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
-    if run_config['use_all_experiments']:
-        start = 100
-        end = 1000
-    else:
-        start = 0
-        end = len(input_data)
+    fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+    start = 100
+    end = 1000
     xticks = np.arange(start, end)
-    if run_config['debug']:
-        _input_data = input_data_raw[:, :, 0]
-        _recon = model(input_data_raw, apply_sigmoid=False).numpy()[:, :, 0]
-        fig, axs = plt.subplots(nrows=_input_data.shape[-1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i in range(_input_data.shape[-1]):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, _input_data[_idx_], label='input')
-            axs[i].plot(xticks, _recon[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
-
-            #axs[i].set_title(cn)
-
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-    else:
-        fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, input_data[_idx_], label='input')
-            axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
-
-            axs[i].set_title(cn)
-
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
+    for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
+        _idx_ = np.s_[start:end, i]
+        axs[i].plot(xticks, input_data[_idx_], label='input')
+        axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
+        #axs[i].plot(xticks, generated_data[_idx_], label='generated')
+        
+        axs[i].set_title(cn)
+        
+        #for a in axs[i]:
+        #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
 
     axs[-1].set_xlabel('time step')
     axs[0].legend(loc='upper left')
@@ -1310,15 +1254,15 @@ LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 if run_config['use_all_experiments']:
     warnings.warn('should use all data `input_data`')
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-    else:
+    if model._name != 'drosoph_vae_conv':
         X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-else:
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
     else:
+        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
+else:
+    if model._name != 'drosoph_vae_conv':
         X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw)))
+    else:
+        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
     
 X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
@@ -1344,10 +1288,6 @@ def plot_debug(input_data, cluster_assignments, cluster_colors=None):
     
 if run_config['debug']:
     plot_debug(input_data, cluster_assignments)
-
-# <codecell>
-
-exp_desc_short
 
 # <codecell>
 
