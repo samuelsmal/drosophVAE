@@ -242,10 +242,6 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_exper
 
 # <codecell>
 
-plots.get_3d_columns_names(selected_cols)
-
-# <codecell>
-
 # will generate a huge plot and take about 6min to run...
 #plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
 

@@ -107,7 +107,7 @@ run_config = {
     'use_all_experiments': False,
     'data_type': _DATA_TYPE_3D_ANGLE_, 
     'use_time_series': True,       # triggers time series application, without this the model is only dense layers
-    'time_series_length': 42,      # note that this is equal to the minimal wanted receptive field length
+    'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
     'latent_dim': None,               # should be adapted given the input dim
@@ -1178,10 +1178,10 @@ optimizer = tf.train.AdamOptimizer(1e-4)
 #optimizer = tf.train.AdadeltaOptimizer(1e-4)
 run_config['optimizer'] = optimizer._name
 _config_hash_ = config.get_config_hash(run_config)
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/skip_conneciton{config.config_description(run_config, short=True)}_{_config_hash_}"
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/skip_connection_{config.config_description(run_config, short=True)}_{_config_hash_}"
+_model_checkpoints_path_ = f"{settings.config.__DATA_ROOT__}/models/skip_connection_{config.config_description(run_config, short=True)}_{_config_hash_}/checkpoint" 
 train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
 test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
-#gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
 
 # <codecell>
 
@@ -1217,6 +1217,7 @@ print(f"will train model {model._config_()}, with global params: {run_config}, h
 print(f"will train for ever...")
 epoch = len(train_reports)
 
+cur_min_val_idx = 0
 
 with warnings.catch_warnings():
     # pesky tensorflow again
@@ -1246,13 +1247,17 @@ with warnings.catch_warnings():
             else:
                 # simple "loading bar"
                 print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
-
-            epoch += 1
+            
+            if epoch > 10 and _cur_test_reports[-1][0] < _cur_test_reports[cur_min_val_idx][0]:
+                cur_min_val_idx = epoch
+                model.save_weights(_model_checkpoints_path_)
 
             #if np.argmin(np.array(_cur_test_reports)[:, 1]) < (len(_cur_test_reports) - 10):
             #    # if there was no improvement in the last 10 epochs, stop it
             #    print('early stopping')
             #    break
+            
+            epoch += 1
         except KeyboardInterrupt:
             tfc.summary.flush()
             print(_progress_str_(epoch, _cur_train_reports, _cur_test_reports, stopped=True))

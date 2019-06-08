@@ -1,3 +1,4 @@
+import numpy as np
 import socket
 from functools import reduce
 import inspect
@@ -31,3 +32,10 @@ def to_time_series(data, sequence_length):
 def if_last(ls):
     for i, x in enumerate(ls):
         yield i, i + 1 == len(ls), x
+
+def n_layers_for_dilated_conv(n_time_steps, kernel_size, dilation_rate=2):
+    if dilation_rate != 2:
+        raise NotImplementedError('left as an exercise for the reader')
+    return np.int(np.ceil(np.log2((n_time_steps -1) / (2 * (kernel_size - 1)) + 1)))
+
+
