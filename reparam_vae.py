@@ -7,7 +7,7 @@
 
 # <markdowncell>
 
-# ## Import TensorFlow and enable Eager execution
+# ## Imports and enabling of eager execution
 
 # <codecell>
 
@@ -34,13 +34,18 @@ from functools import reduce
 from importlib import reload # for debugging and developing, optional
 
 import tensorflow as tf
+import tensorflow.contrib as tfc
+import tensorflow.contrib.eager as tfe
+import tensorflow.keras as tfk
+import tensorflow.keras.layers as tfkl
 import tensorflow_probability as tfp
-tfe = tf.contrib.eager
-tfc = tf.contrib
+
+# for the KL-loss explosion problem
+from tensorflow.python.eager.execution_callbacks import InfOrNanError
+from tensorflow.python.eager.core import _NotOkStatusException
+
 tf.enable_eager_execution()
 tfe.seterr(inf_or_nan='raise')
-tfk = tf.keras
-tfkl = tf.keras.layers
 
 # otherwise TF will print soooo many warnings
 warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
@@ -653,19 +658,22 @@ class DrosophVAE(tfk.Model):
             #eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
             eps = tf.random_normal(shape=[self._batch_size] + list(self.generative_net.input_shape[1:]))
         return self.decode(eps, apply_sigmoid=False)
-  
+    
     def encode(self, x, training=False):
         if self.temporal_conv_net:
             # TODO combine them into one? max pooling or something
             #x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, logvar = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
+            mean, var = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
                                     num_or_size_splits=2,
                                     axis=-1)
         else:
-            mean, logvar = tf.split(self.inference_net(x),
+            mean, var = tf.split(self.inference_net(x),
                                     num_or_size_splits=2,
                                     axis=1)
-        return mean, logvar
+            
+        # the variance should be in [0, inf)
+        var = tf.nn.softplus(var)
+        return mean, var
   
     def reparameterize(self, mean, logvar):
         # TODO check: the params should be correct? check original paper
@@ -955,7 +963,86 @@ data_test.shape
 
 # <codecell>
 
+# For the loss function:
+#
+# https://github.com/pytorch/examples/issues/399
+#   Argues that since we are using a normal distribution we should not use any activation function in the last layer
+#   and the loss should be MSE.
+# https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder?rq=1
+#   Some general discussion about KL vs recon-loss
+# https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
+    
 
+def log_normal_pdf(sample, mean, var, raxis=1):
+    log2pi = tf.log(2. * np.pi)
+    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-var) + var + log2pi), axis=raxis)
+
+def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
+    """
+    Args:
+    
+        model          the model
+        x              the data
+        detailed       set to true if you want the separate losses to be returned as well, basically a debug mode
+        kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
+                       value was found empirically 
+    """
+    mean, var = model.encode(x)
+    z = model.reparameterize(mean, var)
+    x_logit = model.decode(z)
+    
+    #if run_config['use_time_series']:
+    #    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
+    #    # this works on classification data (or binary data)
+    #    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
+    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
+    #else:
+    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+    
+    # Putting more weight on the most current time epochs
+    recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
+                                          labels=x, 
+                                          weights=np.exp(np.linspace(0, 1, num=run_config['time_series_length']))\
+                                                    .reshape((1, run_config['time_series_length'], 1)))
+    
+    # Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
+    # https://arxiv.org/pdf/1606.00704.pdf
+    #  Adversarially Learned Inference
+    #  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
+    
+    # This small constant offset prevents Nan errors
+    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(var) + tf.constant(kl_nan_offset))
+    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=var + tf.constant(kl_nan_offset))
+    try:
+        # the KL loss can explode easily, this is to prevent overflow errors
+        kl = tf.reduce_mean(tf.clip_by_value(tfp.distributions.kl_divergence(p, q, allow_nan_stats=True), 0., 1e32))
+    except (_NotOkStatusException, InfOrNanError) as e:
+        print('Error with KL-loss: ', e, tf.reduce_mean(var))
+        kl = 1.
+    
+    if not detailed:
+        kl = tf.clip_by_value(kl, 0., 1.)
+    
+    if model._loss_weight_kl == 0.:
+        loss = model._loss_weight_reconstruction*recon_loss 
+    else:
+        # KL loss can be NaN for some data. This is inherit to KL-loss (but the data is probably more to blame)
+        loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
+    
+    if detailed:
+        return loss, recon_loss, kl
+    else:
+        return loss
+
+def compute_gradients(model, x): 
+    with tf.GradientTape() as tape: 
+        loss = compute_loss(model, x) 
+        return tape.gradient(loss, model.trainable_variables), loss
+
+def apply_gradients(optimizer, gradients, variables, global_step=None):
+    # TODO try out gradient clipping
+    #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
+    optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
 
 # <codecell>
 

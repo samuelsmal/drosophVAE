@@ -35,6 +35,9 @@ from importlib import reload # for debugging and developing, optional
 
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.python.eager.core import _NotOkStatusException # for the KL loss
+
+
 tfe = tf.contrib.eager
 tfc = tf.contrib
 tf.enable_eager_execution()
@@ -48,7 +51,7 @@ warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
 from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 import som_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
-tf.keras.backend.set_session(sess)
+tfk.backend.set_session(sess)
 
 from som_vae import settings
 from som_vae import preprocessing
@@ -662,19 +665,21 @@ class DrosophVAE(tfk.Model):
         if self.temporal_conv_net:
             # TODO combine them into one? max pooling or something
             #x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, logvar = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
+            mean, var = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
                                     num_or_size_splits=2,
                                     axis=-1)
         else:
-            mean, logvar = tf.split(self.inference_net(x),
+            mean, var = tf.split(self.inference_net(x),
                                     num_or_size_splits=2,
                                     axis=1)
-        return mean, logvar
+            
+        # the variance should be in [0, inf)
+        var = tf.nn.softplus(var)
+        return mean, var
   
-    def reparameterize(self, mean, logvar):
-        # TODO check: the params should be correct? check original paper
+    def reparameterize(self, mean, var):
         eps = tf.random_normal(shape=mean.shape)
-        return eps * tf.exp(logvar * .5) + mean
+        return eps * tf.exp(var * .5) + mean
   
     def decode(self, z, apply_sigmoid=False):
         logits = self.generative_net(z)
@@ -691,8 +696,8 @@ class DrosophVAE(tfk.Model):
         #     z = z_mu + tf.exp(0.5 * z_log_sigma_sq) * epsilon
         # else:
         #     z = z_mu
-        mean, logvar = self.encode(x)
-        z = model.reparameterize(mean, logvar)
+        mean, var = self.encode(x)
+        z = model.reparameterize(mean, var)
         return model.decode(z, apply_sigmoid=True)
     
     def call(self, x, training=False, apply_sigmoid=False):
@@ -945,27 +950,6 @@ def _convolutional_layer_(idx, **kwargs):
                            tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_1", 'padding': 'same'}), 
                             tfkl.BatchNormalization(name=f"conv_block_{idx}_batch_norm")], 
                           name=f"conv_block_{idx}")
-                                          
-#def _skip_connection_model_(input_shape, layer_sizes, output_dim, name):
-#    """
-#    The batch normalisation prior to a convolution and before activation follows:
-#        - S. Ioffe and C. Szegedy. Batch normalization:  Accelerating deepnetwork training by reducing internal covariate shift. InICML, 2015.
-#        - https://arxiv.org/pdf/1512.03385.pdf (Deep Residual Learning for Image Recognition)
-#    """
-#    input_layer = tfkl.Input(shape=(input_shape,))
-#    x = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, input_shape]))(input_layer)
-#
-#    for i, fs in enumerate(layer_sizes):
-#        x = tfkl.BatchNormalization()(x)
-#        x = PaddedConv1dTransposed(n_filters=fs, activation=None, batch_norm=False)(x)
-#        x_skip = tf.reshape(tfkl.Dense(fs, activation=None)(input_layer), [-1, 1, x.shape[-1]])
-#        x = x + x_skip
-#        x = tfkl.BatchNormalization()(x)
-#        x = tfkl.Activation(tf.nn.leaky_relu)(x)
-#        
-#    x = tfkl.TimeDistributed(tfkl.Dense(output_dim, activation=None))(x)
-#
-#    return tfk.Model(inputs=[input_layer], outputs=[x])
 
 class SkipConnectionLayer(tfkl.Layer):
     """
@@ -1040,6 +1024,7 @@ data_test.shape
 
 # <codecell>
 
+from tensorflow.python.eager.execution_callbacks import InfOrNanError
 # For the loss function:
 #
 # https://github.com/pytorch/examples/issues/399
@@ -1050,9 +1035,9 @@ data_test.shape
 # https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
     
 
-def log_normal_pdf(sample, mean, logvar, raxis=1):
+def log_normal_pdf(sample, mean, var, raxis=1):
     log2pi = tf.log(2. * np.pi)
-    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
+    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-var) + var + log2pi), axis=raxis)
 
 def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     """
@@ -1064,8 +1049,8 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
         kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
                        value was found empirically 
     """
-    mean, logvar = model.encode(x)
-    z = model.reparameterize(mean, logvar)
+    mean, var = model.encode(x)
+    z = model.reparameterize(mean, var)
     x_logit = model.decode(z)
     
     #if run_config['use_time_series']:
@@ -1088,9 +1073,14 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     #  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
     
     # This small constant offset prevents Nan errors
-    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(logvar) + tf.constant(kl_nan_offset))
-    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=logvar + tf.constant(kl_nan_offset))
-    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
+    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(var) + tf.constant(kl_nan_offset))
+    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=var + tf.constant(kl_nan_offset))
+    try:
+        # the KL loss can explode easily, this is to prevent overflow errors
+        kl = tf.reduce_mean(tf.clip_by_value(tfp.distributions.kl_divergence(p, q, allow_nan_stats=True), 0., 1e32))
+    except (_NotOkStatusException, InfOrNanError) as e:
+        print('Error with KL-loss: ', e, tf.reduce_mean(var))
+        kl = 1.
     
     if not detailed:
         kl = tf.clip_by_value(kl, 0., 1.)
@@ -1105,15 +1095,6 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
         return loss, recon_loss, kl
     else:
         return loss
-    
-    # TODO check this!
-    # reconstruction loss
-    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
-    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
-    # KL loss
-    logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
-    logqz_x = log_normal_pdf(z, mean, logvar)
-    #return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
 
 def compute_gradients(model, x): 
     with tf.GradientTape() as tape: 
@@ -1270,6 +1251,46 @@ test_reports =  np.array(_cur_test_reports)
 
 train_losses = train_reports[:, 0]
 test_losses = test_reports[:, 0]
+
+# <codecell>
+
+x = data_train
+kl_nan_offset=1e-18
+mean, var = model.encode(x)
+z = model.reparameterize(mean, var)
+x_logit = model.decode(z)
+
+#if run_config['use_time_series']:
+#    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
+#    # this works on classification data (or binary data)
+#    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
+#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
+#else:
+#    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
+
+# Putting more weight on the most current time epochs
+recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
+                                      labels=x, 
+                                      weights=np.exp(np.linspace(0, 1, num=run_config['time_series_length']))\
+                                                .reshape((1, run_config['time_series_length'], 1)))
+
+# Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
+# https://arxiv.org/pdf/1606.00704.pdf
+#  Adversarially Learned Inference
+#  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
+
+# This small constant offset prevents Nan errors
+p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(var) + tf.constant(kl_nan_offset))
+q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=var + tf.constant(kl_nan_offset))
+kl = tfp.distributions.kl_divergence(p, q, allow_nan_stats=True)
+
+# <codecell>
+
+
+
+# <codecell>
+
+tf.reduce_mean(kl)
 
 # <markdowncell>
 
