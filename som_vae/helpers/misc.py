@@ -38,4 +38,9 @@ def n_layers_for_dilated_conv(n_time_steps, kernel_size, dilation_rate=2):
         raise NotImplementedError('left as an exercise for the reader')
     return np.int(np.ceil(np.log2((n_time_steps -1) / (2 * (kernel_size - 1)) + 1)))
 
+def to_time_series_np(x, sequence_length):
+    return np.array(list(to_time_series(x, sequence_length=sequence_length)))
 
+
+def prep_2d_pos_data(x):
+    return x[:,:,:2].reshape(x.shape[0], -1).astype(np.float32)

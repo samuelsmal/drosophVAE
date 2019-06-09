@@ -45,6 +45,7 @@ from tensorflow.python.eager.execution_callbacks import InfOrNanError
 from tensorflow.python.eager.core import _NotOkStatusException
 
 tf.enable_eager_execution()
+# we currently handle them ourselves. but with this, it will throw an error before we can apply the fix
 tfe.seterr(inf_or_nan='raise')
 
 # otherwise TF will print soooo many warnings
@@ -71,7 +72,7 @@ jupyter.fix_layout()
 
 # <markdowncell>
 
-# ## Constants
+# ## Constants (Settings)
 
 # <codecell>
 
@@ -113,7 +114,7 @@ run_config = {
     'use_all_experiments': False,
     'data_type': _DATA_TYPE_3D_ANGLE_,
     'use_time_series': True,       # triggers time series application, without this the model is only dense layers
-    'time_series_length': 10,      # note that this is equal to the minimal wanted receptive field length
+    'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
     'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
     'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
     'latent_dim': None,               # should be adapted given the input dim
@@ -122,7 +123,7 @@ run_config = {
     'loss_weight_kl': 0.0,             # will be adjusted further down (currently)
     'dropout_rate': 0.,
     'with_batch_norm': True,
-    'model_impl': _MODEL_IMPL_TEMPORAL_CONV_
+    'model_impl': _MODEL_IMPL_SKIP_CON_
 }
 
 # And now the ... ugly parts begin. -> TODO put this in a class, 
@@ -162,6 +163,69 @@ def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
                                     .map(lambda pair: list(reversed(pair[0])))\
                                     .map(lambda ls: SD.Experiment._make([*ls, SD._key_from_list_(ls)]))\
                                     .to_list()
+
+# <codecell>
+
+from collections import namedtuple
+
+Data = namedtuple('Data', 'joint_positions normalisation_factors image_paths labels')
+
+# <codecell>
+
+#def load_2d_pos(include_rest_data=False, use_single_fly=True):
+#    """load_2d_pos loads the 2d-positional data
+#    
+#    Parameters
+#        include_rest_data (bool): set to true if you want to include `resting` fly behaviour as well,
+#            ignored when `use_all_experiments` == True
+#        use_single_fly (bool): if True only data from one fly, but multiple experiments are used
+#            if True then there will be no labels
+#    Returns:
+#        A `Data` object, which is a namedtuple
+#    
+#    """
+#    if use_single_fly:
+#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
+#        
+#        frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
+#        labels = frames_idx_with_labels['label'].apply(lambda x: x.value)
+#        if use_single_fly:
+#            frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
+#            labels = labels[frames_idx_with_labels]
+#            
+#        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+#                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+#                                               .to_list()
+#        
+#        if len(frames_of_interest) != len(joint_positions):
+#            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+#            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
+#        
+#    else:
+#        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
+#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
+#        labels = None
+#            
+#    if run_config['use_all_experiments']:
+#        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
+#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
+#    else:
+#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
+#
+#        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
+#                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
+#                                               .to_list()
+#
+#        if len(frames_of_interest) != len(joint_positions):
+#            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+#            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
+#        
+#        joint_positions = joint_positions[frames_of_interest[:len(joint_positions)]]
+#        frames_idx_with_labels = frames_idx_with_labels.iloc[frames_of_interest]
+#        images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
+#            
+#    
+#    return Data(joint_positions, normalisation_factors, image_paths, labels)
 
 # <codecell>
 
@@ -222,9 +286,9 @@ if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_e
     selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
     
     angled_data_columns = SD.get_3d_columns_names(selected_cols)
-    f = plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns)
-    f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
-    plt.subplots_adjust(top=0.97)
+    #f = plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns)
+    #f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
+    #plt.subplots_adjust(top=0.97)
 
     # TODO not so sure here, should we really normalize the data?
     joint_positions, normalisation_factors = preprocessing.normalize(data_angle_raw[:, selected_cols][frames_of_interest])
@@ -301,45 +365,46 @@ joint_positions.shape
 
 def dummy_data_complex_sine_like(length):
     DummyBehaviour = namedtuple('DummyBehaviour', 'type amplitude fraction frequency')
+    # make sure that the fractions add up to 1.
+    # cluster id, behaviour
     _dummy_behaviours_ = [
-        ('sinoid', 1., 0.1, 2),
-        ('flat', 0, 0.2, 0),
-        ('sinoid', 1., 0.2, 3),
-        ('sinoid', 1., 0.1, 5),
-        ('flat', 1., 0.2, 0),
-        ('sinoid', .5, .2, 3)
+        (0, ('sinoid',  1.0, 0.1, 2)),
+        (1, ('flat',    0.0, 0.2, 0)),
+        (2, ('sinoid',  1.0, 0.2, 3)),
+        (3, ('sinoid',  1.0, 0.1, 5)),
+        (4, ('flat',    1.0, 0.2, 0)),
+        (2, ('sinoid',   .5,  .2, 3)),
     ]
-
-    assert np.array(_dummy_behaviours_)[:, 2].astype(np.float).sum() == 1., "I don't know how to split the time duration with the given fractions"
-
-    _dummy_behaviours_ = [DummyBehaviour(*db) for db in _dummy_behaviours_]
+    
     
     cur_idx = 0
     nb_frames = length
 
     _new_frames_ = np.zeros(nb_frames)
+    _cluster_assignments_ = np.zeros(nb_frames)
 
-    for db in _dummy_behaviours_:
+    for l, db in _dummy_behaviours_:
+        db = DummyBehaviour(*db)
         cur_idx_end = np.int(nb_frames * db.fraction + cur_idx)
+        idx = np.s_[cur_idx:cur_idx_end]
         if db.type == 'sinoid':
-            _new_frames_[cur_idx: cur_idx_end] = db.amplitude * np.sin(np.pi * np.linspace(0, 2, cur_idx_end - cur_idx) * db.frequency)
+            _new_frames_[idx] = db.amplitude * np.sin(np.pi * np.linspace(0, 2, cur_idx_end - cur_idx) * db.frequency)
         elif db.type == 'flat':
-            for frame in range(cur_idx, cur_idx_end):
-                _new_frames_[frame] = db.amplitude
+            _new_frames_[idx] = db.amplitude
+            
+        _cluster_assignments_[idx] = l
 
         cur_idx = cur_idx_end
         
-    return _new_frames_
+    return _new_frames_, _cluster_assignments_
+
+# <codecell>
+
+reload(misc)
 
 # <codecell>
 
 # full preprocessing pipeline
-
-def _to_time_series_(x):
-    return np.array(list(misc.to_time_series(x, sequence_length=run_config['time_series_length'])))
-
-def _prep_2d_pos_data_(x):
-    return x[:,:,:2].reshape(x.shape[0], -1).astype(np.float32)
 
 # scaling the data to be in [0, 1]
 # this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
@@ -358,15 +423,15 @@ if run_config['use_time_series']:
     # TODO right now the training and testing data are just concatenated time-sequences, experiment overlapping. which is bad.
     warnings.warn('this is not proper, fix the bugs here')
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        reshaped_joint_position = scaler.fit_transform(_prep_2d_pos_data_(joint_positions))
+        reshaped_joint_position = scaler.fit_transform(misc.prep_2d_pos_data(joint_positions))
     else:
         reshaped_joint_position = scaler.fit_transform(joint_positions)
         
-    reshaped_joint_position = _to_time_series_(reshaped_joint_position)
+    reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
 else:
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
         # angle data is already flat
-        reshaped_joint_position = _prep_2d_pos_data_(joint_positions)
+        reshaped_joint_position = misc.prep_2d_pos_data(joint_positions)
     else:
         reshaped_joint_position = joint_positions
 
@@ -394,18 +459,20 @@ if run_config['debug']:
             raise NotImplementedError
         else:
             _dummy_data_ = np.zeros_like(joint_positions)
+            _dummy_labels_ = np.zeros(joint_positions.shape[0])
             for c in range(_dummy_data_.shape[1]):
-                _dummy_data_[:, c] = dummy_data_complex_sine_like(_dummy_data_.shape[0])
-            
+                _dummy_data_[:, c], _dummy_labels_ = dummy_data_complex_sine_like(_dummy_data_.shape[0])
             
     if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        _dummy_data_ = _prep_2d_pos_data_(_dummy_data_)
+        _dummy_data_ = misc.prep_2d_pos_data(_dummy_data_)
         
     if run_config['use_time_series']:
         reshaped_joint_position = scaler.fit_transform(_dummy_data_)
-        reshaped_joint_position = _to_time_series_(reshaped_joint_position)
+        reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
+        labels = _dummy_labels_[run_config['time_series_length'] - 1:]
     else:
         reshaped_joint_position = _dummy_data_
+        labels = _dummy_labels_
 
 #
 # split and apply scaler
@@ -419,6 +486,8 @@ else:
 if run_config['use_time_series']:
     data_train = reshaped_joint_position[:n_of_data_points]
     data_test = reshaped_joint_position[n_of_data_points:]
+    labels_train = labels[:n_of_data_points]
+    labels_test = labels[n_of_data_points:]
     print('train')
     display.display(pd.DataFrame(data_train[:, -1, :]).describe())
     print('test')
@@ -426,6 +495,8 @@ if run_config['use_time_series']:
 else:
     data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
     data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
+    labels_train = labels[:n_of_data_points]
+    labels_test = labels[n_of_data_points:]
     print('train')
     display.display(pd.DataFrame(data_train).describe())
     print('test')
@@ -455,8 +526,11 @@ else:
 
 # <codecell>
 
-def to_tf_data(X):
-    return tf.data.Dataset.from_tensor_slices(X).shuffle(len(X)).batch(run_config['batch_size'])
+def to_tf_data(X, y=None):
+    if y is None:
+        return tf.data.Dataset.from_tensor_slices(X).shuffle(len(X)).batch(run_config['batch_size'])
+    else:
+        return tf.data.Dataset.from_tensor_slices((X, y)).shuffle(len(X)).batch(run_config['batch_size'])
 
 train_dataset = to_tf_data(data_train)
 test_dataset = to_tf_data(data_test) 
@@ -576,15 +650,38 @@ class TemporalBlock(tfkl.Layer):
 
 # <codecell>
 
+def make_inference_net(model_to_wrap, input_shape, batch_size, activation=tf.nn.softplus):
+    """This is basically a wrapper function. Define your model up to the split into μ and σ.
+    Which is what this function will do.
+    
+    Depending on your interpretation of how a VAE should do it (depends mostly on your reparametrisation trick),
+    you can provide an activation function.
+    
+    E.g. if you think σ should be the variance use `tf.nn.softplus` to force it to be positive.
+    if you think it should be the deviation, then provide `None`.
+    """
+    
+    x = tfk.Input(shape=input_shape, batch_size=batch_size)
+    enc = model_to_wrap(x)
+    mean, var = tf.split(enc, num_or_size_splits=2, axis=-1)
+    
+    if activation is not None:
+        var = tfkl.Activation(activation)(var)
+    
+    return tfk.Model(x, [mean, var])
+
+# <codecell>
+
+# DrosophVAE base class
 # build using:
 #   - https://github.com/tensorflow/tensorflow/blob/r1.13/tensorflow/contrib/eager/python/examples/generative_examples/cvae.ipynb 
 #   - https://www.kaggle.com/hone5com/fraud-detection-with-variational-autoencoder
 
 def dense_layers(sizes, activation_fn=tf.nn.leaky_relu, name_prefix=None):
-    # no activation in the last layer, because either it is 
-    # a) the decoder/generative-layer which will apply a sigmoid activation function itself, or 
-    # b) the encoder/inference-layer which does not need a activation function because ...??? TODO find a reason for this
-    
+    # no activation in the last layer
+    # both models inference and generative should be free (super important for the decoder)
+    # the encoder could be fixed, but we want the "mean" to be represent any value, 
+    # a SoftPlus activation is applied to the "variance" in the `DrosophVAE.encode` method.
     return [tfkl.Dense(size, activation=None if is_last else activation_fn, name=f"{name_prefix}_dense_{idx}") for idx, is_last, size in if_last(sizes)]
 
 def temporal_layers(filter_sizes, kernel_size=2, dropout=0.2):
@@ -641,9 +738,9 @@ class DrosophVAE(tfk.Model):
             inference_input_shape = input_shape[-1]
             generative_input_shape = (latent_dim, )
             
-        self.inference_net = tfk.Sequential([tfkl.InputLayer(input_shape=inference_input_shape, name='input_inference_net'),
+        self.inference_net = make_inference_net(tfk.Sequential([tfkl.InputLayer(input_shape=inference_input_shape, name='input_inference_net'),
                                                  *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
-                                                 name='inference_net')
+                                                 name='inference_net'), inference_input_shape, batch_size)
             
         self.generative_net = tfk.Sequential([tfkl.InputLayer(input_shape=generative_input_shape, name='input_generative_net'),
                                                   *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
@@ -663,22 +760,25 @@ class DrosophVAE(tfk.Model):
         if self.temporal_conv_net:
             # TODO combine them into one? max pooling or something
             #x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, var = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
-                                    num_or_size_splits=2,
-                                    axis=-1)
+            mean, var = self.inference_net(self.temporal_conv_net(x, training=training))
+            #mean, var = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
+            #                        num_or_size_splits=2,
+            #                        axis=-1)
         else:
-            mean, var = tf.split(self.inference_net(x),
-                                    num_or_size_splits=2,
-                                    axis=1)
+            mean, var = self.inference_net(x, training=training)
+            #mean, var = tf.split(self.inference_net(x),
+            #                        num_or_size_splits=2,
+            #                        axis=1)
             
         # the variance should be in [0, inf)
-        var = tf.nn.softplus(var)
         return mean, var
   
-    def reparameterize(self, mean, logvar):
+    def reparameterize(self, mean, var):
         # TODO check: the params should be correct? check original paper
         eps = tf.random_normal(shape=mean.shape)
-        return eps * tf.exp(logvar * .5) + mean
+        #return eps * tf.exp(logvar * .5) + mean
+        # this is the truest form to the original paper https://arxiv.org/pdf/1312.6114v10.pdf
+        return eps * var + mean
   
     def decode(self, z, apply_sigmoid=False):
         logits = self.generative_net(z)
@@ -772,16 +872,26 @@ class PaddedConv1dTransposed(tfkl.Layer):
     
     See also https://distill.pub/2016/deconv-checkerboard/
     """
-    def __init__(self, n_filters, kernel_size=2, name=None, activation=tf.nn.leaky_relu, batch_norm=False):
+    def __init__(self, n_filters, kernel_size=2, name=None, activation=tf.nn.leaky_relu, batch_norm=False, padding=None):
+        """
+        Do NOT set the padding by yourself, the input will be padded in a causal way. If you set padding, this padding will be applied.
+        """
+        
         if batch_norm:
             name += '_bn'
         super(PaddedConv1dTransposed, self).__init__(name=name)
+        
+        if padding is None:
+            padding = 'valid'
+            self._padding_overwrite_ = False
+        else:
+            self._padding_overwrite_ = True
         
         self.n_filters = n_filters
         self.kernel_size = kernel_size
         
         self.padding = [[0, 0], [1, 1], [0, 0]] # adds only a zero at the end of the time-dimension
-        self.conv = tfkl.Conv1D(filters=self.n_filters, kernel_size=self.kernel_size, activation=activation)
+        self.conv = tfkl.Conv1D(filters=self.n_filters, kernel_size=self.kernel_size, activation=activation, padding=padding)
         
         if batch_norm:
             self.batch_norm = tfkl.BatchNormalization()
@@ -789,7 +899,8 @@ class PaddedConv1dTransposed(tfkl.Layer):
             self.batch_norm = None
     
     def call(self, x): 
-        x = tf.pad(x, self.padding)
+        if not self._padding_overwrite_:
+            x = tf.pad(x, self.padding)
         x = self.conv(x)
         
         if self.batch_norm:
@@ -921,14 +1032,18 @@ class DrosophVAESkipConv(DrosophVAE):
         
         print(self._layer_sizes_inference)
         print(self._layer_sizes_generative)
-        
+    
         # TODO add MaxPooling
-        self.inference_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
-                                                  *[tfkl.Conv1D(filters=fs, kernel_size=2, padding='valid', name=f"inf_conv_{i}") 
-                                                    for i, fs in enumerate(self._layer_sizes_inference)],
-                                                  tfkl.Flatten(),
-                                                  tfkl.Dense(2 * self.latent_dim)],
-                                                 name='inference_net')
+        self.inference_net = make_inference_net(tfk.Sequential([*[_convolutional_layer_(idx=i,
+                                                                  filters=fs,
+                                                                  kernel_size=2,
+                                                                  padding='valid',
+                                                                  name=f"inf_{i}",
+                                                                  activation=tf.nn.leaky_relu) 
+                                            for i, fs in enumerate(self._layer_sizes_inference)],
+                                          tfkl.Flatten(),
+                                          tfkl.Dense(2 * self.latent_dim)],
+                                         name='inference_net'), input_shape, batch_size)
         
         self.generative_net = _skip_connection_model_(input_shape=self.latent_dim, 
                                                       layer_sizes=self._layer_sizes_generative,
@@ -936,15 +1051,67 @@ class DrosophVAESkipConv(DrosophVAE):
                                                       name='generative_net')
         
         
+def _convolutional_layer_(idx, **kwargs):
+    return tfk.Sequential([tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_0"}), 
+                           tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_1", 'padding': 'same'}), 
+                            tfkl.BatchNormalization(name=f"conv_block_{idx}_batch_norm")], 
+                          name=f"conv_block_{idx}")
+
+class SkipConnectionLayer(tfkl.Layer):
+    """
+    Taken from https://arxiv.org/pdf/1512.03385.pdf, Deep Residual Learning for Image Recognition
+    
+    The batch normalisation prior to a convolution and before activation follows:
+    S. Ioffe and C. Szegedy. Batch normalization:  Accelerating deepnetwork training by reducing internal covariate shift. InICML, 2015.
+        
+    This class only exists because I can't read too much output. Tensorflow, yeah! (or not)
+    
+    Roughtly equivalent (as it was this some time ago) "functional"-style:
+    x = tfkl.BatchNormalization()(x)
+    x = PaddedConv1dTransposed(n_filters=fs, activation=None, batch_norm=False)(x)
+    x_skip = tf.reshape(tfkl.Dense(fs, activation=None)(input_layer), [-1, 1, x.shape[-1]])
+    x = x + x_skip
+    x = tfkl.BatchNormalization()(x)
+    x = tfkl.Activation(tf.nn.leaky_relu)(x)
+    """
+    def __init__(self, n_filters_weight_layer, activation=tf.nn.leaky_relu, name=None):
+        super(SkipConnectionLayer, self).__init__(name=name)
+        self.bn_in = tfkl.BatchNormalization()
+        self.weight_layer_0 = PaddedConv1dTransposed(n_filters=n_filters_weight_layer, activation=None, batch_norm=False)
+        self.act_0 = tfkl.Activation(activation)
+        self.weight_layer_1 = PaddedConv1dTransposed(n_filters=n_filters_weight_layer, activation=None, batch_norm=False, padding='same')
+                                          
+        self.bn_sk = tfkl.BatchNormalization()
+        self.identity_layer = tfkl.Dense(n_filters_weight_layer, activation=None)
+        self.reshape_layer = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, n_filters_weight_layer]))
+        self.act_1 = tfkl.Activation(activation)
+        
+    def call(self, x_and_skipped):
+        x, x_skipped = x_and_skipped
+        x = self.bn_in(x)
+        x_skipped = self.bn_sk(x_skipped) # This is from another paper, which I forgot to bookmark, seemed sensible
+        x_skipped = self.identity_layer(x_skipped)
+        
+        x = self.weight_layer_0(x)
+        x = self.act_0(x)
+        
+        x = self.weight_layer_1(x)
+        
+        x = x + self.reshape_layer(x_skipped)
+        
+        x = self.act_1(x)
+        
+        return x
+    
+        
 def _skip_connection_model_(input_shape, layer_sizes, output_dim, name):
+    """
+    """
     input_layer = tfkl.Input(shape=(input_shape,))
     x = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, input_shape]))(input_layer)
 
     for i, fs in enumerate(layer_sizes):
-        x = PaddedConv1dTransposed(n_filters=fs, activation=None)(x)
-        x_skip = tf.reshape(tfkl.Dense(x.shape[-1], activation=None)(input_layer), [-1, 1, x.shape[-1]])
-        x = x + x_skip
-        x = tfkl.Activation(tf.nn.leaky_relu)(x)
+        x = SkipConnectionLayer(fs)([x, input_layer])
         
     x = tfkl.TimeDistributed(tfkl.Dense(output_dim, activation=None))(x)
 
@@ -963,7 +1130,7 @@ data_test.shape
 
 # <codecell>
 
-# For the loss function:
+# LOSS FUNCTION
 #
 # https://github.com/pytorch/examples/issues/399
 #   Argues that since we are using a normal distribution we should not use any activation function in the last layer
@@ -971,11 +1138,6 @@ data_test.shape
 # https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder?rq=1
 #   Some general discussion about KL vs recon-loss
 # https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
-    
-
-def log_normal_pdf(sample, mean, var, raxis=1):
-    log2pi = tf.log(2. * np.pi)
-    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-var) + var + log2pi), axis=raxis)
 
 def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     """
@@ -1044,94 +1206,6 @@ def apply_gradients(optimizer, gradients, variables, global_step=None):
     #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
     optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
 
-# <codecell>
-
-# For the loss function:
-#
-# https://github.com/pytorch/examples/issues/399
-#   Argues that since we are using a normal distribution we should not use any activation function in the last layer
-#   and the loss should be MSE.
-# https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder?rq=1
-#   Some general discussion about KL vs recon-loss
-# https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
-    
-
-def log_normal_pdf(sample, mean, logvar, raxis=1):
-    log2pi = tf.log(2. * np.pi)
-    return tf.reduce_sum(-.5 * ((sample - mean) ** 2. * tf.exp(-logvar) + logvar + log2pi), axis=raxis)
-
-def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
-    """
-    Args:
-    
-        model          the model
-        x              the data
-        detailed       set to true if you want the separate losses to be returned as well, basically a debug mode
-        kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
-                       value was found empirically 
-    """
-    mean, logvar = model.encode(x)
-    z = model.reparameterize(mean, logvar)
-    x_logit = model.decode(z)
-    
-    # old version, were only one time step is being reproduced
-    #if run_config['use_time_series']:
-    #    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
-    #    # this works on classification data (or binary data)
-    #    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
-    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
-    #else:
-    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
-
-    # TODO increase weights for the latest construction, exponentially scaled
-    recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
-                                              labels=x, 
-                                              weights=np.exp(np.linspace(0, 1, num=run_config['time_series_length']))\
-                                                        .reshape((1, run_config['time_series_length'], 1)))
-    
-    # Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
-    # https://arxiv.org/pdf/1606.00704.pdf
-    #  Adversarially Learned Inference
-    #  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
-    
-    # This small constant offset prevents Nan errors
-    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(logvar) + tf.constant(kl_nan_offset))
-    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=logvar + tf.constant(kl_nan_offset))
-    kl = tf.reduce_mean(tfp.distributions.kl_divergence(p, q, allow_nan_stats=False))
-    
-    if not detailed:
-        kl = tf.clip_by_value(kl, 0., 1.)
-    
-    if model._loss_weight_kl == 0.:
-        loss = model._loss_weight_reconstruction*recon_loss 
-    else:
-        # KL loss can be NaN for some data. This is inherit to KL-loss (but the data is probably more to blame)
-        loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
-    
-    if detailed:
-        return loss, recon_loss, kl
-    else:
-        return loss
-    
-    # TODO check this!
-    # reconstruction loss
-    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1, 2, 3])
-    #logpx_z = -tf.reduce_sum(cross_ent, axis=[1]) # down to [batch, loss]
-    # KL loss
-    logpz = log_normal_pdf(z, 0., 0.) # shouldn't it be `logvar = 0.0001` or something small?
-    logqz_x = log_normal_pdf(z, mean, logvar)
-    #return -tf.reduce_mean(model._loss_weight_reconstruction*logpx_z + model._loss_weight_kl*(logpz - logqz_x))
-
-def compute_gradients(model, x): 
-    with tf.GradientTape() as tape: 
-        loss = compute_loss(model, x) 
-        return tape.gradient(loss, model.trainable_variables), loss
-
-def apply_gradients(optimizer, gradients, variables, global_step=None):
-    # TODO try out gradient clipping
-    #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
-    optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
-
 # <markdowncell>
 
 # ## training
@@ -1150,11 +1224,9 @@ test_reports = np.array([])
 train_reports = np.array([]) 
 _cur_train_reports = []
 _cur_test_reports  = []
-
+cur_min_val_idx = 0
 run_config['loss_weight_reconstruction'] = 1.0
 run_config['loss_weight_kl'] = 0.0 # 1e-3
-
-run_config['model_impl'] = _MODEL_IMPL_PADD_CONV_
 
 print(f"Using model: {run_config['model_impl']}")
       
@@ -1162,8 +1234,7 @@ model_config = {'latent_dim': run_config['latent_dim'],
                 'input_shape': data_train.shape[1:], 
                 'batch_size': run_config['batch_size'], 
                 'loss_weight_reconstruction': run_config['loss_weight_reconstruction'],
-                'loss_weight_kl': run_config['loss_weight_kl'],
-                'with_batch_norm': run_config['with_batch_norm']}
+                'loss_weight_kl': run_config['loss_weight_kl']}
       
 if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
     model = DrosophVAE(run_config['latent_dim'], 
@@ -1178,13 +1249,12 @@ if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
     if run_config['use_time_series']:
         model.temporal_conv_net.summary()
 elif run_config['model_impl'] == _MODEL_IMPL_PADD_CONV_:
-    model = DrosophVAEConv(**model_config)
+    model = DrosophVAEConv(**{**model_config, 'with_batch_norm': run_config['with_batch_norm']})
 elif run_config['model_impl'] == _MODEL_IMPL_SKIP_CON_:
     model = DrosophVAESkipConv(**model_config)
 else:
     raise ValueError('not such model')
 
-    
 model.inference_net.summary(line_length=100)
 model.generative_net.summary(line_length=100)
 
@@ -1192,10 +1262,10 @@ optimizer = tf.train.AdamOptimizer(1e-4)
 #optimizer = tf.train.AdadeltaOptimizer(1e-4)
 run_config['optimizer'] = optimizer._name
 _config_hash_ = config.get_config_hash(run_config)
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/exponential_weight_{config.config_description(run_config, short=True)}_{_config_hash_}"
+_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config, short=True)}_{_config_hash_}"
+_model_checkpoints_path_ = f"{settings.config.__DATA_ROOT__}/models/{config.config_description(run_config, short=True)}_{_config_hash_}/checkpoint" 
 train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
 test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
-#gradients_writer = tfc.summary.create_file_writer(_base_path_ + '/gradients')
 
 # <codecell>
 
@@ -1260,13 +1330,17 @@ with warnings.catch_warnings():
             else:
                 # simple "loading bar"
                 print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
-
+                
+            if epoch > 10 and _cur_test_reports[-1][0] < _cur_test_reports[cur_min_val_idx][0]:
+                cur_min_val_idx = epoch
+                model.save_weights(_model_checkpoints_path_)
+                
             epoch += 1
 
-            #if np.argmin(np.array(_cur_test_reports)[:, 1]) < (len(_cur_test_reports) - 10):
-            #    # if there was no improvement in the last 10 epochs, stop it
-            #    print('early stopping')
-            #    break
+            if np.argmin(np.array(_cur_test_reports)[:, 1]) < (len(_cur_test_reports) - 10):
+                # if there was no improvement in the last 10 epochs, stop it
+                print('early stopping')
+                break
         except KeyboardInterrupt:
             tfc.summary.flush()
             print(_progress_str_(epoch, _cur_train_reports, _cur_test_reports, stopped=True))
@@ -1279,6 +1353,408 @@ test_reports =  np.array(_cur_test_reports)
 
 train_losses = train_reports[:, 0]
 test_losses = test_reports[:, 0]
+
+# <codecell>
+
+# triplet, semi-supervised learning block init cell
+triplet_epoch = 0
+
+triplet_test_losses = np.array([]) 
+triplet_train_losses = np.array([]) 
+triplet_cur_train_reports = []
+triplet_cur_test_reports  = []
+triplet_cur_min_val_idx = 0
+run_config['loss_weight_reconstruction'] = 1.0
+run_config['loss_weight_kl'] = 0.0 # 1e-3
+
+triplet_optimizer = tf.train.AdamOptimizer(1e-4)
+#optimizer = tf.train.AdadeltaOptimizer(1e-4)
+run_config['optimizer_triplet'] = optimizer._name
+_model_checkpoints_encoder_path_ = f"{settings.config.__DATA_ROOT__}/models/{config.config_description(run_config, short=True)}_{_config_hash_}_encoder/checkpoint" 
+
+labels_as_int = frames_idx_with_labels['label'].apply(lambda x: x.value).values
+triplet_train_dataset = to_tf_data(data_train, labels_as_int[run_config['time_series_length'] - 1:len(data_train)+run_config['time_series_length'] - 1])
+triplet_test_dataset = to_tf_data(data_test, labels_as_int[len(data_train) + run_config['time_series_length'] - 1:]) 
+
+# <codecell>
+
+# triplet loss
+"""Define functions to create the triplet loss with online triplet mining."""
+
+import tensorflow as tf
+
+
+def _pairwise_distances(embeddings, squared=False):
+    """Compute the 2D matrix of distances between all the embeddings.
+
+    Args:
+        embeddings: tensor of shape (batch_size, embed_dim)
+        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
+                 If false, output is the pairwise euclidean distance matrix.
+
+    Returns:
+        pairwise_distances: tensor of shape (batch_size, batch_size)
+    """
+    # Get the dot product between all embeddings
+    # shape (batch_size, batch_size)
+    dot_product = tf.matmul(embeddings, tf.transpose(embeddings))
+
+    # Get squared L2 norm for each embedding. We can just take the diagonal of `dot_product`.
+    # This also provides more numerical stability (the diagonal of the result will be exactly 0).
+    # shape (batch_size,)
+    square_norm = tf.diag_part(dot_product)
+
+    # Compute the pairwise distance matrix as we have:
+    # ||a - b||^2 = ||a||^2  - 2 <a, b> + ||b||^2
+    # shape (batch_size, batch_size)
+    distances = tf.expand_dims(square_norm, 1) - 2.0 * dot_product + tf.expand_dims(square_norm, 0)
+
+    # Because of computation errors, some distances might be negative so we put everything >= 0.0
+    distances = tf.maximum(distances, 0.0)
+
+    if not squared:
+        # Because the gradient of sqrt is infinite when distances == 0.0 (ex: on the diagonal)
+        # we need to add a small epsilon where distances == 0.0
+        mask = tf.cast(tf.equal(distances, 0.0), tf.float32)
+        distances = distances + mask * 1e-16
+
+        distances = tf.sqrt(distances)
+
+        # Correct the epsilon added: set the distances on the mask to be exactly 0.0
+        distances = distances * (1.0 - mask)
+
+    return distances
+
+
+def _get_anchor_positive_triplet_mask(labels):
+    """Return a 2D mask where mask[a, p] is True iff a and p are distinct and have same label.
+
+    Args:
+        labels: tf.int32 `Tensor` with shape [batch_size]
+
+    Returns:
+        mask: tf.bool `Tensor` with shape [batch_size, batch_size]
+    """
+    # Check that i and j are distinct
+    indices_equal = tf.cast(tf.eye(tf.shape(labels)[0]), tf.bool)
+    indices_not_equal = tf.logical_not(indices_equal)
+
+    # Check if labels[i] == labels[j]
+    # Uses broadcasting where the 1st argument has shape (1, batch_size) and the 2nd (batch_size, 1)
+    labels_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
+
+    # Combine the two masks
+    mask = tf.logical_and(indices_not_equal, labels_equal)
+
+    return mask
+
+
+def _get_anchor_negative_triplet_mask(labels):
+    """Return a 2D mask where mask[a, n] is True iff a and n have distinct labels.
+
+    Args:
+        labels: tf.int32 `Tensor` with shape [batch_size]
+
+    Returns:
+        mask: tf.bool `Tensor` with shape [batch_size, batch_size]
+    """
+    # Check if labels[i] != labels[k]
+    # Uses broadcasting where the 1st argument has shape (1, batch_size) and the 2nd (batch_size, 1)
+    labels_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
+
+    mask = tf.logical_not(labels_equal)
+
+    return mask
+
+
+def _get_triplet_mask(labels):
+    """Return a 3D mask where mask[a, p, n] is True iff the triplet (a, p, n) is valid.
+
+    A triplet (i, j, k) is valid if:
+        - i, j, k are distinct
+        - labels[i] == labels[j] and labels[i] != labels[k]
+
+    Args:
+        labels: tf.int32 `Tensor` with shape [batch_size]
+    """
+    # Check that i, j and k are distinct
+    indices_equal = tf.cast(tf.eye(tf.shape(labels)[0]), tf.bool)
+    indices_not_equal = tf.logical_not(indices_equal)
+    i_not_equal_j = tf.expand_dims(indices_not_equal, 2)
+    i_not_equal_k = tf.expand_dims(indices_not_equal, 1)
+    j_not_equal_k = tf.expand_dims(indices_not_equal, 0)
+
+    distinct_indices = tf.logical_and(tf.logical_and(i_not_equal_j, i_not_equal_k), j_not_equal_k)
+
+
+    # Check if labels[i] == labels[j] and labels[i] != labels[k]
+    label_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
+    i_equal_j = tf.expand_dims(label_equal, 2)
+    i_equal_k = tf.expand_dims(label_equal, 1)
+
+    valid_labels = tf.logical_and(i_equal_j, tf.logical_not(i_equal_k))
+
+    # Combine the two masks
+    mask = tf.logical_and(distinct_indices, valid_labels)
+
+    return mask
+
+
+def batch_all_triplet_loss(labels, embeddings, margin, squared=False):
+    """Build the triplet loss over a batch of embeddings.
+
+    We generate all the valid triplets and average the loss over the positive ones.
+
+    Args:
+        labels: labels of the batch, of size (batch_size,)
+        embeddings: tensor of shape (batch_size, embed_dim)
+        margin: margin for triplet loss
+        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
+                 If false, output is the pairwise euclidean distance matrix.
+
+    Returns:
+        triplet_loss: scalar tensor containing the triplet loss
+    """
+    # Get the pairwise distance matrix
+    pairwise_dist = _pairwise_distances(embeddings, squared=squared)
+
+    # shape (batch_size, batch_size, 1)
+    anchor_positive_dist = tf.expand_dims(pairwise_dist, 2)
+    assert anchor_positive_dist.shape[2] == 1, "{}".format(anchor_positive_dist.shape)
+    # shape (batch_size, 1, batch_size)
+    anchor_negative_dist = tf.expand_dims(pairwise_dist, 1)
+    assert anchor_negative_dist.shape[1] == 1, "{}".format(anchor_negative_dist.shape)
+
+    # Compute a 3D tensor of size (batch_size, batch_size, batch_size)
+    # triplet_loss[i, j, k] will contain the triplet loss of anchor=i, positive=j, negative=k
+    # Uses broadcasting where the 1st argument has shape (batch_size, batch_size, 1)
+    # and the 2nd (batch_size, 1, batch_size)
+    triplet_loss = anchor_positive_dist - anchor_negative_dist + margin
+
+    # Put to zero the invalid triplets
+    # (where label(a) != label(p) or label(n) == label(a) or a == p)
+    mask = _get_triplet_mask(labels)
+    mask = tf.cast(mask, tf.float32)
+    triplet_loss = tf.multiply(mask, triplet_loss)
+
+    # Remove negative losses (i.e. the easy triplets)
+    triplet_loss = tf.maximum(triplet_loss, 0.0)
+
+    # Count number of positive triplets (where triplet_loss > 0)
+    valid_triplets = tf.cast(tf.greater(triplet_loss, 1e-16), tf.float32)
+    num_positive_triplets = tf.reduce_sum(valid_triplets)
+    num_valid_triplets = tf.reduce_sum(mask)
+    fraction_positive_triplets = num_positive_triplets / (num_valid_triplets + 1e-16)
+
+    # Get final mean triplet loss over the positive valid triplets
+    triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
+
+    return triplet_loss, fraction_positive_triplets
+
+
+def batch_hard_triplet_loss(labels, embeddings, margin, squared=False):
+    """Build the triplet loss over a batch of embeddings.
+
+    For each anchor, we get the hardest positive and hardest negative to form a triplet.
+
+    Args:
+        labels: labels of the batch, of size (batch_size,)
+        embeddings: tensor of shape (batch_size, embed_dim)
+        margin: margin for triplet loss
+        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
+                 If false, output is the pairwise euclidean distance matrix.
+
+    Returns:
+        triplet_loss: scalar tensor containing the triplet loss
+    """
+    # Get the pairwise distance matrix
+    pairwise_dist = _pairwise_distances(embeddings, squared=squared)
+
+    # For each anchor, get the hardest positive
+    # First, we need to get a mask for every valid positive (they should have same label)
+    mask_anchor_positive = _get_anchor_positive_triplet_mask(labels)
+    mask_anchor_positive = tf.cast(mask_anchor_positive, tf.float32)
+
+    # We put to 0 any element where (a, p) is not valid (valid if a != p and label(a) == label(p))
+    anchor_positive_dist = tf.multiply(mask_anchor_positive, pairwise_dist)
+
+    # shape (batch_size, 1)
+    hardest_positive_dist = tf.reduce_max(anchor_positive_dist, axis=1, keepdims=True)
+    tf.summary.scalar("hardest_positive_dist", tf.reduce_mean(hardest_positive_dist))
+
+    # For each anchor, get the hardest negative
+    # First, we need to get a mask for every valid negative (they should have different labels)
+    mask_anchor_negative = _get_anchor_negative_triplet_mask(labels)
+    mask_anchor_negative = tf.cast(mask_anchor_negative, tf.float32)
+
+    # We add the maximum value in each row to the invalid negatives (label(a) == label(n))
+    max_anchor_negative_dist = tf.reduce_max(pairwise_dist, axis=1, keepdims=True)
+    anchor_negative_dist = pairwise_dist + max_anchor_negative_dist * (1.0 - mask_anchor_negative)
+
+    # shape (batch_size,)
+    hardest_negative_dist = tf.reduce_min(anchor_negative_dist, axis=1, keepdims=True)
+    tf.summary.scalar("hardest_negative_dist", tf.reduce_mean(hardest_negative_dist))
+
+    # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
+    triplet_loss = tf.maximum(hardest_positive_dist - hardest_negative_dist + margin, 0.0)
+
+    # Get final mean triplet loss
+    triplet_loss = tf.reduce_mean(triplet_loss)
+
+    return triplet_loss
+
+# <codecell>
+
+# LOSS LABEL FUNCTION
+
+def compute_loss_labels(x, labels):
+    """About triplet loss: https://omoindrot.github.io/triplet-loss
+    
+    """
+    #triplet_loss = tfc.losses.metric_learning.triplet_semihard_loss(labels, np.hstack((mean, var)))
+    #loss = triplet_loss.batch_all_triplet_loss(labels, np.hstack((mean, var)), 0.1)
+    loss, loss_fraction_pos = batch_all_triplet_loss(labels, x, 1., squared=True)
+    #triplet_loss = tfc.losses.metric_learning.cluster_loss(labels, np.hstack((mean, var)), 0.1)
+    
+    return loss
+
+
+def triplet_compute_gradients(model, x, y): 
+    with tf.GradientTape() as tape: 
+        #mean, var = model(x)
+        #encoded = tf.nn.l2_normalize(((mean, var)))
+        loss = compute_loss_labels(tf.concat(model(x), axis=1), y) 
+        return tape.gradient(loss, model.trainable_variables), loss
+    
+    
+def _compute_loss_for_data_triplet_(model, data):
+    loss = tfe.metrics.Mean()
+    for x, y in data:
+        #mean, var = model(batch_x)
+        #encoded = tf.nn.l2_normalize(((mean, var)))
+        #loss_b = compute_loss_labels(mean, batch_y) 
+        loss_b = compute_loss_labels(tf.concat(model(x), axis=1), y) 
+        #loss_b = compute_loss_labels(model, batch_x, batch_y)
+        loss(loss_b)
+        
+    return loss.result()
+
+# <codecell>
+
+#grad, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
+
+# <codecell>
+
+# debug
+#from functools import partial
+#
+#def wrapped_cll(x, y):
+#    return
+#
+#grad_fn = tfe.gradients_function()
+#
+#tf.expand_dims(tf.concat(_m(train_x), axis=1), axis=1).numpy().shape
+#
+#grad_y, grad_x = grad_fn(train_y, tf.concat(_m(train_x), axis=1))
+#
+#grad_x
+#
+#with tf.GradientTape() as tape: 
+#    tape.watch(train_x)
+#    loss = compute_loss_labels(_m, train_x, train_y) 
+#    #print(model.inference_net.trainable_variables)
+#    grad = tape.gradient(loss, _m.trainable_variables)
+#
+#loss, len(grad), len(_m.trainable_variables), grad[:3]
+#
+#with tf.GradientTape() as tape: 
+#    loss = compute_loss(model, train_x) 
+#    grad = tape.gradient(loss, model.trainable_variables)
+
+# <codecell>
+
+def _progress_str_triplet_(epoch, _cur_train_reports, _cur_test_reports, time=None, stopped=False):
+    progress_str = f"Epoch: {epoch:0>4}, train/test loss: {_cur_train_reports[-1]:0.3f}\t {_cur_test_reports[-1]:0.3f}"
+    if time:
+        progress_str += f" took {time:0.3f} sec"
+        
+    if stopped:
+        progress_str = "Stopped training during " + progress_str
+        
+    return progress_str
+
+# <codecell>
+
+# This is the run cell. Designed to be able to train the model.inference_net for an arbitrary amount of epochs.
+
+from functools import partial
+
+print(f"will train for ever...")
+triplet_epoch = len(triplet_train_losses)
+
+# todo wrap below code using this
+#@tf.function
+#def train(model, dataset, optimizer):
+#    for x, y in dataset:
+#        with tf.GradientTape() as tape:
+#            prediction = model(x)
+#            loss = loss_fn(prediction, y)
+#        gradients = tape.gradient(loss, model.trainable_variables)
+#        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+#loss_fn = partial(batch_hard_triplet_loss, margin=1.)
+#grad_fn = tfe.gradients_function(partial(compute_loss_labels, model=model.inference_net))
+
+with warnings.catch_warnings():
+    # pesky tensorflow again
+    warnings.simplefilter(action='ignore', category=FutureWarning)
+    while True:
+        try:
+            start_time = time.time()
+            for train_x, train_y in triplet_train_dataset:
+                gradients, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
+                #loss = compute_loss_labels(model.inference_net, train_x, train_y) 
+                #grad_y, gradients = grad_fn(train_y, train_x)
+                apply_gradients(triplet_optimizer, gradients, model.inference_net.trainable_variables)
+            end_time = time.time()
+
+            triplet_cur_train_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_train_dataset)]
+            triplet_cur_test_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_test_dataset)]
+            
+            _triplet_recorded_scalars_ =  ['triplet_loss']
+            tf_helpers.tf_write_scalars(train_summary_writer, zip(_triplet_recorded_scalars_, [triplet_cur_train_reports[-1]]), step=triplet_epoch)
+            tf_helpers.tf_write_scalars(test_summary_writer,  zip(_triplet_recorded_scalars_, [triplet_cur_test_reports[-1]]),  step=triplet_epoch)
+
+            with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
+                for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.inference_net.trainable_variables]):
+                    tfc.summary.histogram(f'gradient_{var_name}', g, step=triplet_epoch)
+
+            if triplet_epoch % 10 == 0:
+                print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, time=end_time - start_time))
+                tfc.summary.flush()
+            else:
+                # simple "loading bar"
+                print('=' * (triplet_epoch % 10) + '.' * (10 - (triplet_epoch % 10)), end='\r')
+                
+            #if triplet_epoch > 10 and triplet_cur_test_reports[-1][0] < triplet_cur_test_reports[cur_min_val_idx][0]:
+            #    cur_min_val_idx = triplet_epoch
+            #    model.inference_net.save_weights(_model_checkpoints_path_)
+                
+            triplet_epoch += 1
+
+            #if np.argmin(np.array(triplet_cur_test_reports)[:, 1]) < (len(triplet_cur_test_reports) - 10):
+            #    # if there was no improvement in the last 10 epochs, stop it
+            #    print('early stopping')
+            #    break
+        except KeyboardInterrupt:
+            tfc.summary.flush()
+            print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, stopped=True))
+            break
+        
+        
+tfc.summary.flush()
+triplet_train_losses = np.array(triplet_cur_train_reports)
+triplet_test_losses =  np.array(triplet_cur_test_reports)
 
 # <markdowncell>
 
@@ -1295,6 +1771,8 @@ def _reverse_to_original_shape_(X):
 
 # <codecell>
 
+# data pipeline for evaluation
+
 exp_desc = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)})
 exp_desc_short = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)}, short=True)
 input_data_raw = np.vstack((data_train, data_test))
@@ -1308,13 +1786,14 @@ else:
 input_data = _reverse_to_original_shape_(input_data_raw[back_to_single_time])
 reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[back_to_single_time])
     
-_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size'] / run_config['time_series_length']))
+_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
 generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time])[:len(reconstructed_data)]
 
 # <codecell>
 
+# losses
 for a, n in zip(range(train_reports.shape[1]), _recorded_scalars_):
-    plt.subplot(train_reports.shape[1], 1, a + 1)
+    plt.subplot(train_reports.shape[1] + 1, 1, a + 1)
     plt.plot(train_reports[:, a], label=f"train_{n}")
     plt.plot(test_reports[:, a], label=f"test_{n}")
     plt.title(n)
@@ -1324,12 +1803,21 @@ plt.legend()
 
 # <codecell>
 
+plt.plot(triplet_train_losses)
+plt.plot(triplet_test_losses)
+
+# <codecell>
+
 #plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
 
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data, reconstructed_data, generated_data, validation_cut_off=len(data_train), exp_desc=exp_desc);
+    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data,
+                                                                 reconstructed_data,
+                                                                 generated_data,
+                                                                 validation_cut_off=len(data_train),
+                                                                 exp_desc=exp_desc_short);
 else:
     # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
     if run_config['use_all_experiments']:
@@ -1412,16 +1900,26 @@ cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
 
 # <codecell>
 
+from matplotlib.collections import LineCollection
+
 def plot_debug(input_data, cluster_assignments, cluster_colors=None):
     _clusters = np.unique(cluster_assignments)
     _colors = sns.color_palette(n_colors=len(_clusters))
     if cluster_colors is None:
         cluster_colors = dict(zip(_clusters, _colors))
+        
+    lines, colors = zip(*[([(x, input_data[x, 0]) for x in segment], cluster_colors[cluster_id])
+                           for cluster_id, segments in video.group_by_cluster(cluster_assignments).items() 
+                           for segment in segments])
 
-    plt.figure(figsize=(10, 8))
-    for cluster_id, segments in video.group_by_cluster(cluster_assignments).items():
-        for s in segments:
-            plt.plot(s, input_data[s], c=cluster_colors[cluster_id])
+
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    coll = LineCollection(lines, colors=colors)
+    #coll.set_array(np.random.random(xy.shape[0]))
+
+    ax.add_collection(coll)
+    ax.autoscale_view()
 
     plt.title('Input data and cluster assigment using debug data');
     
@@ -1442,6 +1940,8 @@ exp_desc_short
 
 from matplotlib import gridspec
 
+labels = frames_idx_with_labels['label'].apply(lambda x: x.name)
+
 fig = plt.figure(figsize=(20, 18))
 gs = gridspec.GridSpec(3, 2, figure=fig)
 ax1 = plt.subplot(gs[:2, :])
@@ -1454,11 +1954,16 @@ for cluster in np.unique(cluster_assignments):
     c_idx = cluster_assignments == cluster
     if run_config['use_all_experiments']:
         c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
-    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], X_latent_mean_tsne_proj[c_idx, 1], label=cluster, ax=ax1, color=cluster_colors[cluster])
+    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
+                    X_latent_mean_tsne_proj[c_idx, 1], 
+                    label=cluster, 
+                    ax=ax1,
+                    color=cluster_colors[cluster], 
+                    style=labels[run_config['time_series_length'] - 1:][c_idx],
+                    legend='brief')
     sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2)
     sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3)
     
-plt.legend()
 ax1.set_title('T-SNE proejection of latent space (mean & var stacked)')
 ax2.set_title('mean')
 ax3.set_title('var');
@@ -1485,7 +1990,25 @@ def video_prep_recon_data(input_data):
 # <codecell>
 
 if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    _positional_data_ = [reverse_pos_pipeline(input_data), reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
+    _positional_data_ = [reverse_pos_pipeline(input_data, normalisation_factors=normalisation_factors), 
+                         reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
+else:
+    raise NotImplementedError('give me a break')
+    
+p = video.comparision_video_of_reconstruction(_positional_data_,
+                                              images_paths_for_experiments=images_paths_for_experiments, 
+                                              n_train=len(data_train),
+                                              cluster_assignments=cluster_assignments,
+                                              as_frames=False,
+                                              exp_desc=exp_desc_short)
+
+display_video(p)
+
+# <codecell>
+
+if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+    _positional_data_ = [reverse_pos_pipeline(input_data, normalisation_factors=normalisation_factors), 
+                         reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
 else:
     raise NotImplementedError('give me a break')
     
@@ -1584,6 +2107,12 @@ cluster_vids = OrderedDict((p[1], video.comparision_video_of_reconstruction(_pos
                     for p in _t[:_N_CLUSTER_TO_VIZ_])
 
 print('cluster_vids: ', cluster_vids.keys())
+
+# <codecell>
+
+#c_idx = 0
+c_idx += 1
+display_video(list(cluster_vids.values())[c_idx])
 
 # <codecell>
 
