@@ -42,9 +42,6 @@ import tensorflow.keras.layers as tfkl
 import tensorflow_probability as tfp
 
 # for the KL-loss explosion problem
-from tensorflow.python.eager.execution_callbacks import InfOrNanError
-from tensorflow.python.eager.core import _NotOkStatusException
-
 tf.enable_eager_execution()
 # we currently handle them ourselves. but with this, it will throw an error before we can apply the fix
 tfe.seterr(inf_or_nan='raise')
@@ -342,21 +339,6 @@ else:
 
 # <markdowncell>
 
-# ## Use *tf.data* to create batches and shuffle the dataset
-
-# <codecell>
-
-def to_tf_data(X, y=None):
-    if y is None:
-        return tf.data.Dataset.from_tensor_slices(X).shuffle(len(X)).batch(run_cfg['batch_size'])
-    else:
-        return tf.data.Dataset.from_tensor_slices((X, y)).shuffle(len(X)).batch(run_cfg['batch_size'])
-
-X_train_dataset= to_tf_data(X_train)
-X_test_dataset = to_tf_data(X_test) 
-
-# <markdowncell>
-
 # # model def
 
 # <markdowncell>
@@ -426,196 +408,40 @@ plt.legend()
 
 # <codecell>
 
+from som_vae.helpers.tensorflow import to_tf_data
+
 from som_vae.training import vae as vae_training
-
-# <codecell>
-
-reload(vae_training)
-model, checkpoint_path, train_writer, test_writer, optimizer = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-
-# <codecell>
+from som_vae.training import supervised as supervised_training
 
 reload(vae_training)
-model, optimizer, train_reports, test_reports = vae_training.train(model, optimizer, 
-                                                                   train_summary_writer=train_writer,
-                                                                   test_summary_writer=test_writer,
-                                                                   train_dataset=X_train_dataset, 
-                                                                   test_dataset=X_test_dataset)
+reload(supervised_training)
 
 # <codecell>
 
-# triplet, semi-supervised learning block init cell
-triplet_epoch = 0
+X_train_dataset= to_tf_data(X_train, batch_size=run_cfg['batch_size'])
+X_test_dataset = to_tf_data(X_test, batch_size=run_cfg['batch_size']) 
 
-triplet_test_losses = np.array([]) 
-triplet_train_losses = np.array([]) 
-triplet_cur_train_reports = []
-triplet_cur_test_reports  = []
-triplet_cur_min_val_idx = 0
-run_config['loss_weight_reconstruction'] = 1.0
-run_config['loss_weight_kl'] = 0.0 # 1e-3
+vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+model = vae_training_args['model']
 
-triplet_optimizer = tf.train.AdamOptimizer(1e-4)
-#optimizer = tf.train.AdadeltaOptimizer(1e-4)
-run_config['optimizer_triplet'] = optimizer._name
-_model_checkpoints_encoder_path_ = f"{settings.config.__DATA_ROOT__}/models/{config.config_description(run_config, short=True)}_{_config_hash_}_encoder/checkpoint" 
-
-labels_as_int = frames_idx_with_labels['label'].apply(lambda x: x.value).values
-triplet_train_dataset = to_tf_data(data_train, labels_as_int[run_config['time_series_length'] - 1:len(data_train)+run_config['time_series_length'] - 1])
-triplet_test_dataset = to_tf_data(data_test, labels_as_int[len(data_train) + run_config['time_series_length'] - 1:]) 
+vae_training_results = vae_training.train(**vae_training_args,
+                                          train_dataset=X_train_dataset, 
+                                          test_dataset=X_test_dataset,
+                                          early_stopping=False,
+                                          n_epochs=10)
 
 # <codecell>
 
-# LOSS LABEL FUNCTION
-
-def compute_loss_labels(x, labels):
-    """About triplet loss: https://omoindrot.github.io/triplet-loss
-    
-    """
-    #triplet_loss = tfc.losses.metric_learning.triplet_semihard_loss(labels, np.hstack((mean, var)))
-    #loss = triplet_loss.batch_all_triplet_loss(labels, np.hstack((mean, var)), 0.1)
-    loss, loss_fraction_pos = batch_all_triplet_loss(labels, x, 1., squared=True)
-    #triplet_loss = tfc.losses.metric_learning.cluster_loss(labels, np.hstack((mean, var)), 0.1)
-    
-    return loss
-
-
-def triplet_compute_gradients(model, x, y): 
-    with tf.GradientTape() as tape: 
-        #mean, var = model(x)
-        #encoded = tf.nn.l2_normalize(((mean, var)))
-        loss = compute_loss_labels(tf.concat(model(x), axis=1), y) 
-        return tape.gradient(loss, model.trainable_variables), loss
-    
-    
-def _compute_loss_for_data_triplet_(model, data):
-    loss = tfe.metrics.Mean()
-    for x, y in data:
-        #mean, var = model(batch_x)
-        #encoded = tf.nn.l2_normalize(((mean, var)))
-        #loss_b = compute_loss_labels(mean, batch_y) 
-        loss_b = compute_loss_labels(tf.concat(model(x), axis=1), y) 
-        #loss_b = compute_loss_labels(model, batch_x, batch_y)
-        loss(loss_b)
-        
-    return loss.result()
-
-# <codecell>
-
-#grad, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
-
-# <codecell>
-
-# debug
-#from functools import partial
+#X_train_supervised_dataset = to_tf_data(X_train, preprocessing.frame_label_pair_to_int(y_train), batch_size=run_cfg['batch_size'])
+#X_test_supervised_dataset = to_tf_data(X_train, preprocessing.frame_label_pair_to_int(y_train), batch_size=run_cfg['batch_size'])
 #
-#def wrapped_cll(x, y):
-#    return
-#
-#grad_fn = tfe.gradients_function()
-#
-#tf.expand_dims(tf.concat(_m(train_x), axis=1), axis=1).numpy().shape
-#
-#grad_y, grad_x = grad_fn(train_y, tf.concat(_m(train_x), axis=1))
-#
-#grad_x
-#
-#with tf.GradientTape() as tape: 
-#    tape.watch(train_x)
-#    loss = compute_loss_labels(_m, train_x, train_y) 
-#    #print(model.inference_net.trainable_variables)
-#    grad = tape.gradient(loss, _m.trainable_variables)
-#
-#loss, len(grad), len(_m.trainable_variables), grad[:3]
-#
-#with tf.GradientTape() as tape: 
-#    loss = compute_loss(model, train_x) 
-#    grad = tape.gradient(loss, model.trainable_variables)
-
-# <codecell>
-
-def _progress_str_triplet_(epoch, _cur_train_reports, _cur_test_reports, time=None, stopped=False):
-    progress_str = f"Epoch: {epoch:0>4}, train/test loss: {_cur_train_reports[-1]:0.3f}\t {_cur_test_reports[-1]:0.3f}"
-    if time:
-        progress_str += f" took {time:0.3f} sec"
-        
-    if stopped:
-        progress_str = "Stopped training during " + progress_str
-        
-    return progress_str
-
-# <codecell>
-
-# This is the run cell. Designed to be able to train the model.inference_net for an arbitrary amount of epochs.
-
-from functools import partial
-
-print(f"will train for ever...")
-triplet_epoch = len(triplet_train_losses)
-
-# todo wrap below code using this
-#@tf.function
-#def train(model, dataset, optimizer):
-#    for x, y in dataset:
-#        with tf.GradientTape() as tape:
-#            prediction = model(x)
-#            loss = loss_fn(prediction, y)
-#        gradients = tape.gradient(loss, model.trainable_variables)
-#        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-
-#loss_fn = partial(batch_hard_triplet_loss, margin=1.)
-#grad_fn = tfe.gradients_function(partial(compute_loss_labels, model=model.inference_net))
-
-with warnings.catch_warnings():
-    # pesky tensorflow again
-    warnings.simplefilter(action='ignore', category=FutureWarning)
-    while True:
-        try:
-            start_time = time.time()
-            for train_x, train_y in triplet_train_dataset:
-                gradients, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
-                #loss = compute_loss_labels(model.inference_net, train_x, train_y) 
-                #grad_y, gradients = grad_fn(train_y, train_x)
-                apply_gradients(triplet_optimizer, gradients, model.inference_net.trainable_variables)
-            end_time = time.time()
-
-            triplet_cur_train_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_train_dataset)]
-            triplet_cur_test_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_test_dataset)]
-            
-            _triplet_recorded_scalars_ =  ['triplet_loss']
-            tf_helpers.tf_write_scalars(train_summary_writer, zip(_triplet_recorded_scalars_, [triplet_cur_train_reports[-1]]), step=triplet_epoch)
-            tf_helpers.tf_write_scalars(test_summary_writer,  zip(_triplet_recorded_scalars_, [triplet_cur_test_reports[-1]]),  step=triplet_epoch)
-
-            with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-                for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.inference_net.trainable_variables]):
-                    tfc.summary.histogram(f'gradient_{var_name}', g, step=triplet_epoch)
-
-            if triplet_epoch % 10 == 0:
-                print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, time=end_time - start_time))
-                tfc.summary.flush()
-            else:
-                # simple "loading bar"
-                print('=' * (triplet_epoch % 10) + '.' * (10 - (triplet_epoch % 10)), end='\r')
-                
-            #if triplet_epoch > 10 and triplet_cur_test_reports[-1][0] < triplet_cur_test_reports[cur_min_val_idx][0]:
-            #    cur_min_val_idx = triplet_epoch
-            #    model.inference_net.save_weights(_model_checkpoints_path_)
-                
-            triplet_epoch += 1
-
-            #if np.argmin(np.array(triplet_cur_test_reports)[:, 1]) < (len(triplet_cur_test_reports) - 10):
-            #    # if there was no improvement in the last 10 epochs, stop it
-            #    print('early stopping')
-            #    break
-        except KeyboardInterrupt:
-            tfc.summary.flush()
-            print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, stopped=True))
-            break
-        
-        
-tfc.summary.flush()
-triplet_train_losses = np.array(triplet_cur_train_reports)
-triplet_test_losses =  np.array(triplet_cur_test_reports)
+#supervised_training_args = supervised_training.init(run_config=run_cfg)
+#supervised_training_results = supervised_training.train(model.inference_net,
+#                                                        **supervised_training_args,
+#                                                        train_dataset=X_train_supervised_dataset, 
+#                                                        test_dataset=X_test_supervised_dataset,
+#                                                        early_stopping=False,
+#                                                        n_epochs=4)
 
 # <markdowncell>
 
@@ -652,8 +478,8 @@ generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() f
 
 # <codecell>
 
-train_reports = np.array(train_reports)
-test_reports= np.array(test_reports)
+train_reports = vae_training_results['train_report']
+test_reports= vae_training_results['test_report']
 
 # <codecell>
 
@@ -666,11 +492,6 @@ for a, n in zip(range(train_reports.shape[1]), ['a', 'b', 'c']):
     
 plt.tight_layout()
 plt.legend()
-
-# <codecell>
-
-plt.plot(triplet_train_losses)
-plt.plot(triplet_test_losses)
 
 # <codecell>
 

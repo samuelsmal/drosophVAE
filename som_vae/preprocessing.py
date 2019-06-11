@@ -125,6 +125,11 @@ def _convert_3d_to_angle_(data):
     data_angle[np.isnan(data_angle) | np.isinf(data_angle)] = 0
     return data_angle
 
+
+def frame_label_pair_to_int(frame_labels):
+    return [ls.label.value for ls in frame_labels[:, -1, 1]]
+
+
 def preprocess_3d_angle_data(frame_data, frame_labels, low_variance_cutoff=0., blacklist_behavior=None, normalize_features=True):
     """ Full preprocessing pipeline for 3d angle data
     """

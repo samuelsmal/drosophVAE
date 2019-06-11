@@ -109,7 +109,8 @@ class DrosophVAE(tfk.Model):
 
     def reparameterize(self, mean, var):
         # TODO check: the params should be correct? check original paper
-        eps = tf.random.normal(shape=mean.shape)
+        # I know of the error. the proposed function does not work...
+        eps = tf.random_normal(shape=mean.shape)
         #return eps * tf.exp(logvar * .5) + mean
         # this is the truest form to the original paper https://arxiv.org/pdf/1312.6114v10.pdf
         return eps * var + mean

@@ -35,3 +35,10 @@ def tf_write_scalars(writer, scalars, step):
     with writer.as_default(), tfc.summary.always_record_summaries():
         for n, v in scalars:
             tfc.summary.scalar(n, v, step=step)
+
+
+def to_tf_data(X, y=None, batch_size=None):
+    if y is None:
+        return tf.data.Dataset.from_tensor_slices(X).shuffle(len(X)).batch(batch_size)
+    else:
+        return tf.data.Dataset.from_tensor_slices((X, y)).shuffle(len(X)).batch(batch_size)

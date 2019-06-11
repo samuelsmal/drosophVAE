@@ -21,7 +21,7 @@ def _pairwise_distances(embeddings, squared=False):
     # Get squared L2 norm for each embedding. We can just take the diagonal of `dot_product`.
     # This also provides more numerical stability (the diagonal of the result will be exactly 0).
     # shape (batch_size,)
-    square_norm = tf.diag_part(dot_product)
+    square_norm = tf.linalg.tensor_diag_part(dot_product)
 
     # Compute the pairwise distance matrix as we have:
     # ||a - b||^2 = ||a||^2  - 2 <a, b> + ||b||^2
@@ -221,3 +221,15 @@ def batch_hard_triplet_loss(labels, embeddings, margin, squared=False):
     triplet_loss = tf.reduce_mean(triplet_loss)
 
     return triplet_loss
+
+
+def compute_loss_labels(x, labels):
+    """About triplet loss: https://omoindrot.github.io/triplet-loss
+
+    """
+    #triplet_loss = tfc.losses.metric_learning.triplet_semihard_loss(labels, np.hstack((mean, var)))
+    #loss = triplet_loss.batch_all_triplet_loss(labels, np.hstack((mean, var)), 0.1)
+    loss, loss_fraction_pos = batch_all_triplet_loss(labels, x, 1., squared=True)
+    #triplet_loss = tfc.losses.metric_learning.cluster_loss(labels, np.hstack((mean, var)), 0.1)
+
+    return loss

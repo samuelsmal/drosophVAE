@@ -2,6 +2,9 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
+from tensorflow.python.eager.execution_callbacks import InfOrNanError
+from tensorflow.python.eager.core import _NotOkStatusException
+
 # LOSS FUNCTION
 #
 # https://github.com/pytorch/examples/issues/399
