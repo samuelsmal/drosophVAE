@@ -3,8 +3,9 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 
+from som_vae.data_loading import get_3d_columns_names
 from som_vae.settings import config, skeleton
-from som_vae.settings.data import get_3d_columns_names
+from som_vae.settings.config import SetupConfig
 
 
 def save_figure(func):
@@ -20,7 +21,7 @@ def save_figure(func):
         if fig is None:
             return fig
         s = clean_string(fig._suptitle.get_text())
-        fig.savefig(f"{config.PATH_TO_FIGURES}/{s}.png")
+        fig.savefig(f"{SetupConfig.value('figures_root_path')}/{s}.png")
         return fig
     return wrapper
 

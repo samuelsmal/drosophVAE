@@ -1,10 +1,11 @@
+from functools import reduce
 from datetime import datetime
 
 import json
 import numpy as np
 
 from som_vae.helpers.misc import EEnum, get_hostname
-
+from som_vae.settings.data import Behavior
 
 class DataType(EEnum):
     # Can't start a member with a number...
@@ -30,6 +31,22 @@ class BaseConfig(dict):
     def hash(self, digest_length=5):
         return str(hash(json.dumps({**self, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
 
+    @classmethod
+    def value(cls, *keys):
+        """Helper to return one single value (may be what ever that value is).
+
+        E.g. value('hubert', 'fly_id')
+        """
+        try:
+            val = reduce(lambda d, k: d[k], keys, cls())
+
+            if isinstance(val, str) and 'UNKOWN' in val:
+                raise ValueError('{0} value is not set! Reading {1}'.format(keys, val))
+        except KeyError:
+            raise ValueError("Could not find a value for the given key: {}".format(keys))
+
+        return val
+
 ####################################################
 #                                                  #
 # Setup config: Paths, experiment definitions, ... #
@@ -41,9 +58,9 @@ class SetupConfig(BaseConfig):
         'frames_per_second': 100,
         'legs': [0, 1, 2], # no longer in use
         'camera_of_interest': 1,
-        'nb_of_axis': 2,
-        'nb_tracked_points': 5, # per leg, igoring the rest for now
-        'nb_cameras': 7,
+        'n_axis': 2,
+        'n_tracked_points': 5, # per leg, igoring the rest for now
+        'n_cameras': 7,
         'experiment_black_list': ['181220_Rpr_R57C10_GC6s_tdTom'], # all other experiments are used
         'fly_black_list': ['180920_aDN_PR-Fly2-005_SG1',
                            '180921_aDN_CsCh-Fly6-003_SG1'], # for those flys the angle conversion give odd results,
@@ -114,6 +131,17 @@ class RunConfig(BaseConfig):
         'dropout_rate': 0.,
         'with_batch_norm': True,
         'model_impl': ModelType.SKIP_PADD_CONV,
+        'optimizer': 'Adam',
+        'train_test_ratio': 0.7,
+        'angle_3d_params': {
+            'preprocessing': {
+                'low_variance_cutoff': 0.,
+                'blacklist_behavior': [Behavior.REST, Behavior.NONE],
+                'normalize_features': True
+            }
+        },
+        'pos_2d_params': {
+        }
     }
 
     def __init__(self, **kwargs):
@@ -121,6 +149,7 @@ class RunConfig(BaseConfig):
 
         if self['use_single_fly']:
             self['batch_size'] = 1024
+            self['train_test_ratio'] = 0.9
 
         if not(self['data_type'] in DataType):
             raise NotImplementedError(f"This data type is not supported. Must be one of either"
@@ -141,22 +170,22 @@ class RunConfig(BaseConfig):
         else:
             raise ValueError(f"this data_type is not supported: {self['data_type']}")
 
-    def description(self, short=False):
+    def description(self, short=True):
         def _bool_(v):
             return 'T' if self[v] else 'F'
 
         valus_of_interest = [
-            ('data', '', self['data_type']),
+            ('data', '', self['data_type'].name),
             ('time', 't', self['time_series_length'] if self['use_time_series'] else 'F'),
             ('kernel', 'k', self['conv_layer_kernel_size']),
             ('n_clayers', 'ncl', self['n_conv_layers']),
             ('latent_dim', 'ld', self['latent_dim']),
-            ('multiple_flys', 'mf', _bool_('use_all_experiments')),
+            ('use_single_fly', 'mf', _bool_('use_single_fly')),
             ('optimizer', 'opt', self.get('optimizer')),
             ('loss_weight_recon', 'lwr', self.get('loss_weight_reconstruction')),
             ('loss_weight_kl', 'lwkl', self.get('loss_weight_kl')),
             ('dropout_rate', 'dr', self.get('dropout_rate')),
-            ('model_impl', 'mi', self.get('model_impl')),
+            ('model_impl', 'mi', self.get('model_impl').name),
             ('with_batch_norm', 'bn', _bool_('with_batch_norm'))
         ]
 
@@ -172,6 +201,20 @@ class RunConfig(BaseConfig):
 
         return descr_str
 
+    def value(self, *keys):
+        """Helper to return one single value (may be what ever that value is).
+
+        E.g. value('hubert', 'fly_id')
+        """
+        try:
+            val = reduce(lambda d, k: d[k], keys, self)
+
+            if isinstance(val, str) and 'UNKOWN' in val:
+                raise ValueError('{0} value is not set! Reading {1}'.format(keys, val))
+        except KeyError:
+            raise ValueError("Could not find a value for the given key: {}".format(keys))
+
+        return val
 
     @classmethod
     def POS_2D(cls):

@@ -4,6 +4,7 @@ import json
 import pickle
 from datetime import datetime
 import pathlib
+import numpy as np
 
 class Behavior(Enum):
     WALK_FORW = 0
@@ -134,6 +135,42 @@ _LABELLED_DATA_RAW_ = [
     ((768, 799), Behavior.WALK_BACKW, '180920_aDN_CsCh', 'Fly2', '005_SG1'),
     ((799, 900), Behavior.REST,       '180920_aDN_CsCh', 'Fly2', '005_SG1'),
 ]
+
+def dummy_data_complex_sine_like(length):
+    DummyBehaviour = namedtuple('DummyBehaviour', 'type amplitude fraction frequency')
+    # make sure that the fractions add up to 1.
+    # cluster id, behaviour
+    _dummy_behaviours_ = [
+        (0, ('sinoid',  1.0, 0.1, 2)),
+        (1, ('flat',    0.0, 0.2, 0)),
+        (2, ('sinoid',  1.0, 0.2, 3)),
+        (3, ('sinoid',  1.0, 0.1, 5)),
+        (4, ('flat',    1.0, 0.2, 0)),
+        (2, ('sinoid',   .5,  .2, 3)),
+    ]
+
+
+    cur_idx = 0
+    nb_frames = length
+
+    _new_frames_ = np.zeros(nb_frames)
+    _cluster_assignments_ = np.zeros(nb_frames)
+
+    for l, db in _dummy_behaviours_:
+        db = DummyBehaviour(*db)
+        cur_idx_end = np.int(nb_frames * db.fraction + cur_idx)
+        idx = np.s_[cur_idx:cur_idx_end]
+        if db.type == 'sinoid':
+            _new_frames_[idx] = db.amplitude * np.sin(np.pi * np.linspace(0, 2, cur_idx_end - cur_idx) * db.frequency)
+        elif db.type == 'flat':
+            _new_frames_[idx] = db.amplitude
+
+        _cluster_assignments_[idx] = l
+
+        cur_idx = cur_idx_end
+
+    return _new_frames_, _cluster_assignments_
+
 
 LABELLED_SEQUENCES = [LabelledSequence._make(i) for i in _LABELLED_DATA_RAW_]
 EXPERIMENTS = list(set(Experiment(study_id=l.study_id, fly_id=l.fly_id,

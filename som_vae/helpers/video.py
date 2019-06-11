@@ -105,11 +105,11 @@ def get_frame_path(frame_id, path, camera_id):
     return path.format(camera_id=camera_id, frame_id=frame_id)
 
 
-def _get_and_check_file_path_(args, template=config.EXPERIMENT_VIDEO_PATH):
-    gif_file_path = template.format(begin_frame=args[0], end_frame=args[-1])
-    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
-
-    return gif_file_path
+#def _get_and_check_file_path_(args, template=SetupConfig.value('video_root_path')):
+#    gif_file_path = template.format(begin_frame=args[0], end_frame=args[-1])
+#    pathlib.Path(gif_file_path).parent.mkdir(parents=True, exist_ok=True)
+#
+#    return gif_file_path
 
 
 def _save_frames_(file_path, frames, format='mp4', **kwargs):
@@ -310,10 +310,6 @@ def combine_images_h(img1, img2):
     return vis
     #cv2.imshow("test", vis)
 
-
-# This can probably be removed... and should
-_BEHAVIOR_COLORS_ = dict(zip(list(data._BehaviorLabel_),
-                             _float_to_int_color_(sns.color_palette(n_colors=len(data._BehaviorLabel_)))))
 
 
 def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None, exp_desc=None, as_frames=False):

@@ -10,42 +10,9 @@ from functional import seq
 
 from som_vae.settings import skeleton
 from som_vae.settings.data import EXPERIMENTS, LABELLED_SEQUENCES, experiment_key, Behavior, LabelledSequence
-from som_vae.settings.config import DataType
+from som_vae.settings.config import DataType, SetupConfig
 
 
-def _angle_three_points_(a, b, c):
-    """
-    Given a set of any 3 points, (a,b,c), returns the angle ba^bc.
-    """
-    ba = a - b
-    bc = c - b
-    denom = (np.linalg.norm(ba) * np.linalg.norm(bc))
-
-    if np.abs(denom) <= 1e-8:
-        raise ValueError('denom too small')
-
-    cosine_angle = np.dot(ba, bc) / denom
-    return np.arccos(cosine_angle)
-
-
-def _convert_3d_to_angle_(data):
-    data_angle = np.zeros((data.shape[0], data.shape[1]), dtype=np.float32)
-    joint_blacklist = [skeleton.is_body_coxa,
-                       skeleton.is_tarsus_tip,
-                       skeleton.is_stripe,
-                       skeleton.is_antenna]
-
-    for img_id in range(data.shape[0]):
-        for j_id in range(1, data.shape[1]-1):
-            if any([fn(j_id) for fn in joint_blacklist]):
-                continue
-            data_angle[img_id, j_id] = angle_three_points(
-                data[img_id, j_id - 1, :],
-                data[img_id, j_id, :],
-                data[img_id, j_id + 1, :])
-
-    data_angle[np.isnan(data_angle) | np.isinf(data_angle)] = 0
-    return data_angle
 
 def _load_and_fix_(sequence, data):
     # I have no clue why I need to do this. Semihg knows of this data problem.
@@ -94,7 +61,45 @@ def load_labelled_data(run_config, setup_config):
     #return sequence_data, frame_labels, sequence_labels
     return frame_data, frame_labels
 
+def get_data_and_normalization(experiments, normalize_data=False, dimensions='2d', return_with_experiment_id=False):
+    if normalize_data and return_with_experiment_id:
+        raise ValueError('choose one')
 
+    # TODO wtf?
+    ret = seq(experiments).map(partial(positional_data,
+                                dimensions=dimensions,
+                                return_experiment_id=return_with_experiment_id))\
+                   .filter(lambda x: x is not None)\
+
+    if return_with_experiment_id:
+        exp_ids, ret = zip(*ret.to_list())
+        ret = seq(ret)
+
+    if dimensions == '2d':
+        ret = ret.map(_simple_checks_)\
+                 .map(_get_camera_of_interest_)\
+                 .map(_get_visible_legs_)\
+                 .map(add_third_dimension)\
+                 .map(get_only_first_legs)
+
+    if normalize_data:
+        ret = normalize(np.vstack(ret.to_list()))
+    else:
+        ret = ret.to_list()
+
+    if return_with_experiment_id:
+        return list(zip(exp_ids, ret))
+    else:
+        return ret
+
+
+def load_all_experiments(data_type,
+                         experiment_black_list=SetupConfig.value('experiment_black_list'),
+                         fly_black_list=SetupConfig.value('fly_black_list')):
+    all_experiments = [e for e in experiments_from_root() if e.study_id not in experiment_black_list
+                       or data.experiment_key(obj=e) in fly_black_list]
+    joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True,
+                                             dimensions='3d' if data_type == DataType.ANGLE_3D else '2d')
 
 def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=None,
                     experiment_path_template=None, positional_data_path_template=None,  return_experiment_id=False):
@@ -181,7 +186,7 @@ def get_3d_columns_names(selected_columns):
     return np.array([f"limb: {skeleton.limb_id[i]}: {p.name}" for i, p in enumerate(skeleton.tracked_points)])[selected_columns]
 
 
-def experiments_from_root(root):
+def experiments_from_root(root=SetupConfig.value('experiment_root_path')):
     # amazing clusterfuck of loading the data, sorry
     return seq(Path(root).iterdir()).flat_map(lambda p: (c for c in p.iterdir() if c.is_dir()))\
                                     .flat_map(lambda p: (c for c in p.iterdir() if c.is_dir()))\
