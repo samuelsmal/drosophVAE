@@ -1,3 +1,4 @@
+from enum import Enum
 import numpy as np
 import socket
 from functools import reduce
@@ -44,3 +45,9 @@ def to_time_series_np(x, sequence_length):
 
 def prep_2d_pos_data(x):
     return x[:,:,:2].reshape(x.shape[0], -1).astype(np.float32)
+
+
+class EEnum(Enum):
+    @classmethod
+    def list(cls):
+        return list(map(lambda c: c.name, cls))

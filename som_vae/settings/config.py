@@ -1,187 +1,182 @@
-import json
-import pickle
 from datetime import datetime
-import pathlib
 
-from som_vae.helpers.misc import get_hostname
-from som_vae.settings import data
+import json
+import numpy as np
 
-NB_DIMS = 3
-
-LEGS = [0, 1, 2, 5, 6, 7]
-LEGS = [0, 1, 2] #, 5, 6, 7] # since we do not care about the other side
-CAMERA_OF_INTEREST = 1
-NB_OF_AXIS = 2
-NB_TRACKED_POINTS = 5 # per leg, igoring the rest for now
-NB_CAMERAS = 7
-NB_RECORDED_DIMESIONS = 2
-
-FRAMES_PER_SECOND = 100
-NYQUIST_FREQUENCY_OF_MEASUREMENTS = FRAMES_PER_SECOND / 2
-
-# TODO make this loadable
-STUDY_ID = "180920_aDN_CsCh"
-EXPERIMENT_ID = "001_SG1"
-FLY_ID = "Fly2"
+from som_vae.helpers.misc import EEnum, get_hostname
 
 
+class DataType(EEnum):
+    # Can't start a member with a number...
+    ANGLE_3D = 0
+    POS_2D = 1
 
-if get_hostname() == 'upramdyapc6':
-    __DATA_ROOT__ = "/home/samuel/neural_clustering_data"
-    __EXPERIMENT_ROOT__ =  "/ramdya-nas/SVB/experiments"
-elif get_hostname() == 'contosam':
-    __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
-    __EXPERIMENT_ROOT__ =  "/home/sam/Dropbox"
-else:
-    __DATA_ROOT__ = "/home/sam/proj/epfl/neural_clustering_data"
-    __EXPERIMENT_ROOT__ = f"{__DATA_ROOT__}/experiments"
+class ModelType(EEnum):
+    TEMP_CONV = 0
+    PADD_CONV = 1
+    SKIP_PADD_CONV = 2
 
-__VIDEO_ROOT__ = f"{__DATA_ROOT__}/videos"
+class BaseConfig(dict):
+    def __init__(self, **kwargs):
+        dict.__init__(self)
+        self.update(kwargs)
 
+    def __getitem__(self, key):
+        return dict.__getitem__(self, key)
 
-# Check out the functions below, use them and not these fragments
-PATH_EXPERIMENT = "{base_path}/{study_id}/{fly_id}/{experiment_id}"
-PATH_EXPERIMENT_POSITIONAL_DATA = "{base_experiment_path}/behData/images/"
-PATH_EXPERIMENT_IMAGE = "{base_experiment_path}/behData/images/camera_{camera_id}_img_{{image_id:0>6}}.jpg"
+    def __setitem__(self, key, val):
+        dict.__setitem__(self, key, val)
 
-PATH_TO_FIGURES = f"{__DATA_ROOT__}/figures"
+    def hash(self, digest_length=5):
+        return str(hash(json.dumps({**self, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
 
-#POSE_DATA_PATH = POSE_DATA_BASE_PATH.format(experiment_id=EXPERIMENT_ID)
+####################################################
+#                                                  #
+# Setup config: Paths, experiment definitions, ... #
+#                                                  #
+####################################################
 
-#POSE_DATA_PATH = "/ramdya-nas/SVB/experiments/{fly_id}/001_coronal/behData/images_renamed/pose_result__mnt_NAS_SVB_181220_Rpr_R57C10_GC6s_tdTom_001_coronal_behData_images_renamed.pkl".format(fly_id=FLY)
-#POSE_FRAME_PATH = "/ramdya-nas/SVB/experiments/{fly_id}/001_coronal/behData/images_renamed/camera_{{camera_id}}_img_{{frame_id:06d}}.jpg".format(fly_id=FLY)
+class SetupConfig(BaseConfig):
+    DEFAULT_VALUES = {
+        'frames_per_second': 100,
+        'legs': [0, 1, 2], # no longer in use
+        'camera_of_interest': 1,
+        'nb_of_axis': 2,
+        'nb_tracked_points': 5, # per leg, igoring the rest for now
+        'nb_cameras': 7,
+        'experiment_black_list': ['181220_Rpr_R57C10_GC6s_tdTom'], # all other experiments are used
+        'fly_black_list': ['180920_aDN_PR-Fly2-005_SG1',
+                           '180921_aDN_CsCh-Fly6-003_SG1'], # for those flys the angle conversion give odd results,
+                                                           # and their distributions seem way off compared to the others)
+        'data_root_path': None,
+        'experiment_root_path': None,
+        'hubert': { # there can only be one. hubert is the fly with which I started, use him to debug stuff
+            'study_id': '180920_aDN_CsCh',
+            'experiment_id': '001_SG1',
+            'fly_id': 'Fly2',
+        },
+    }
 
-SEQUENCE_GIF_PATH = "/home/samuel/Videos/{fly_id}/sequence_{{begin_frame}}-{{end_frame}}.mp4".format(fly_id="todo_dummy_change_this")
-EXPERIMENT_VIDEO_PATH = __VIDEO_ROOT__ + "/{experiment_id}_sequence_{vid_id}.mp4"
+    def __init__(self, **kwargs):
+        super(BaseConfig, self).__init__({**SetupConfig.DEFAULT_VALUES, **kwargs})
 
-
-def full_experiment_id(study_id=STUDY_ID, experiment_id=EXPERIMENT_ID, fly_id=FLY_ID):
-    return f"{study_id}-{experiment_id}-{fly_id}"
-
-
-def get_experiment_id(experiment):
-    return full_experiment_id(study_id=experiment.study_id,
-                              experiment_id=experiment.experiment_id,
-                              fly_id=experiment.fly_id)
-
-
-def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=__EXPERIMENT_ROOT__, return_experiment_id=False):
-    """
-    Returns the positional data for the given experiment.
-
-    Input
-    -----
-
-    experiment: Can be either data.Experiment or data.__LabelledData__
-    dimensions: String that indicates if `2d` or `3d`.
-    pattern:    String of the corresponding file name.
-
-    Returns
-    -------
-
-    numpy array of found data
-
-    """
-    base = PATH_EXPERIMENT.format(base_path=base_path,
-                                  study_id=experiment.study_id,
-                                  fly_id=experiment.fly_id,
-                                  experiment_id=experiment.experiment_id)
-
-    pos_data_path = PATH_EXPERIMENT_POSITIONAL_DATA.format(base_experiment_path=base)
-
-    try:
-        pose = [p for p in pathlib.Path(pos_data_path).iterdir() if pattern in p.name]
-
-        if len(pose) == 0:
-            raise FileNotFoundError('Could not find the pose data file')
+        # host specific location for data
+        if get_hostname() == 'upramdyapc6':
+            data_root_path = '/home/samuel/neural_clustering_data'
+            experiment_root_path =  '/ramdya-nas/SVB/experiments'
+        elif get_hostname() == 'contosam':
+            data_root_path = '/home/sam/proj/epfl/neural_clustering_data'
+            experiment_root_path =  '/home/sam/Dropbox'
         else:
-            pose = pose[0]
-    except FileNotFoundError as e:
-        print(f"huh?? something odd with {experiment.key}: {pathlib.Path(pos_data_path)}: {e}")
-        return None
+            data_root_path = '/home/sam/proj/epfl/neural_clustering_data'
+            experiment_root_path = f"{data_root_path}/experiments"
 
-    with open(pose, 'rb') as f:
-        data = pickle.load(f)[f'points{dimensions}']
-        if return_experiment_id:
-            return experiment.key, data
+        # This is so much pain, but since the data is all somewhere in some folder...
+        self['data_root_path'] = data_root_path
+        self['experiment_root_path'] = experiment_root_path
+        self['video_root_path'] = f"{data_root_path}/videos"
+        self['figures_root_path'] = f"{data_root_path}/figures"
+
+        self['experiment_path_template'] = '{base_path}/{study_id}/{fly_id}/{experiment_id}'
+        # to be filled with `experiment_path_template` as `base_experiment_path`
+        self['experiment_limb_pos_data_dir'] = '{base_experiment_path}/behData/images/'
+        self['fly_image_template'] = f"{{base_experiment_path}}/behData/images/camera_{self['camera_of_interest']}_img_{{image_id:0>6}}.jpg"
+
+#################################################
+#                                               #
+# Run config, model definition, hyperparameters #
+#                                               #
+#################################################
+
+# Note that not all variables will be used by all models
+
+
+class RunConfig(BaseConfig):
+    DEFAULT_VALUES = {
+        'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
+        'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
+        'd_sinoid_data': False,
+        'd_sinoid_cluster_data': True,
+        'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input.
+                                       # allowing the model to learn the identity function.
+        'use_single_fly': True,
+        'data_type': DataType.ANGLE_3D,
+        'use_time_series': True,       # triggers time series application, without this the model is only dense layers
+        'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
+        'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None,
+                                       # it will be automatically computed.
+        'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None,
+                                       # it will be automatically computed.
+        'latent_dim': None,               # should be adapted given the input dim
+        'batch_size': 128,
+        'loss_weight_reconstruction': 1.0,
+        'loss_weight_kl': 0.0,             # if zero it will not even be computed
+        'dropout_rate': 0.,
+        'with_batch_norm': True,
+        'model_impl': ModelType.SKIP_PADD_CONV,
+    }
+
+    def __init__(self, **kwargs):
+        super(BaseConfig, self).__init__({**RunConfig.DEFAULT_VALUES, **kwargs})
+
+        if self['use_single_fly']:
+            self['batch_size'] = 1024
+
+        if not(self['data_type'] in DataType):
+            raise NotImplementedError(f"This data type is not supported. Must be one of either"
+                                      f"{DataType.list()}")
+
+        if self['n_conv_layers'] is None:
+            self['n_conv_layers'] = np.int(np.ceil(np.log2((self['time_series_length'] - 1) / (2 * (self['conv_layer_kernel_size'] - 1)) + 1)))
+
+        if self['conv_layer_kernel_size'] is None:
+            raise NotImplementedError('ups')
+
+        if self['data_type'] == DataType.POS_2D:
+            # goes from 15 * 2 = 30 -> 8
+            self['latent_dim'] = 8
+        elif self['data_type'] == DataType.ANGLE_3D:
+            # goes from 18 -> 4
+            self['latent_dim'] = 4
         else:
-            return data
+            raise ValueError(f"this data_type is not supported: {self['data_type']}")
+
+    def description(self, short=False):
+        def _bool_(v):
+            return 'T' if self[v] else 'F'
+
+        valus_of_interest = [
+            ('data', '', self['data_type']),
+            ('time', 't', self['time_series_length'] if self['use_time_series'] else 'F'),
+            ('kernel', 'k', self['conv_layer_kernel_size']),
+            ('n_clayers', 'ncl', self['n_conv_layers']),
+            ('latent_dim', 'ld', self['latent_dim']),
+            ('multiple_flys', 'mf', _bool_('use_all_experiments')),
+            ('optimizer', 'opt', self.get('optimizer')),
+            ('loss_weight_recon', 'lwr', self.get('loss_weight_reconstruction')),
+            ('loss_weight_kl', 'lwkl', self.get('loss_weight_kl')),
+            ('dropout_rate', 'dr', self.get('dropout_rate')),
+            ('model_impl', 'mi', self.get('model_impl')),
+            ('with_batch_norm', 'bn', _bool_('with_batch_norm'))
+        ]
+
+        descr_idx = 1 if short else 0
+        descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest[1:]))
+
+        descr_str = valus_of_interest[0][2] + '-' + descr_str
+
+        if self['debug']:
+            descr_str += '_' + ''.join([k for k, v in self.items() if k.startswith('d_') and v])
+        else:
+            descr_str += '_' + ('all_data' if self['use_all_experiments'] else 'small')
+
+        return descr_str
 
 
-def images_paths(experiment, camera_id=CAMERA_OF_INTEREST):
-    base = PATH_EXPERIMENT.format(base_path=__EXPERIMENT_ROOT__,
-                                  study_id=experiment.study_id,
-                                  fly_id=experiment.fly_id,
-                                  experiment_id=experiment.experiment_id)
+    @classmethod
+    def POS_2D(cls):
+        return cls(data_type=DataType.POS_2D)
 
-    image_dir = PATH_EXPERIMENT_POSITIONAL_DATA.format(base_experiment_path=base)
-
-    images = sorted([(int(p.stem[-6:]), str(p)) for p in pathlib.Path(image_dir).iterdir()
-                     if f'camera_{camera_id}' in p.name], key=lambda x: x[0])
-
-    return images
-
-
-def get_path_for_image(d, frame_id, base_path=__EXPERIMENT_ROOT__, camera_id=CAMERA_OF_INTEREST):
-    base = PATH_EXPERIMENT.format(base_path=base_path,
-                                  study_id=d.study_id,
-                                  fly_id=d.fly_id,
-                                  experiment_id=d.experiment_id)
-
-    path_image = PATH_EXPERIMENT_IMAGE.format(base_experiment_path=base,
-                                              camera_id=camera_id)
-
-    return path_image.format(image_id=frame_id)
-
-
-def config_description(config, short=False):
-    """to be used with a `run_config` from reparam_vae
-    """
-    def _bool_(v):
-        return 'T' if config[v] else 'F'
-
-    valus_of_interest = [
-        ('data', '', config['data_type']),
-        ('time', 't', config['time_series_length'] if config['use_time_series'] else 'F'),
-        ('kernel', 'k', config['conv_layer_kernel_size']),
-        ('n_clayers', 'ncl', config['n_conv_layers']),
-        ('latent_dim', 'ld', config['latent_dim']),
-        ('multiple_flys', 'mf', _bool_('use_all_experiments')),
-        ('optimizer', 'opt', config.get('optimizer')),
-        ('loss_weight_recon', 'lwr', config.get('loss_weight_reconstruction')),
-        ('loss_weight_kl', 'lwkl', config.get('loss_weight_kl')),
-        ('dropout_rate', 'dr', config.get('dropout_rate')),
-        ('model_impl', 'mi', config.get('model_impl')),
-        ('with_batch_norm', 'bn', _bool_('with_batch_norm'))
-    ]
-
-    descr_idx = 1 if short else 0
-    descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest[1:]))
-
-    descr_str = valus_of_interest[0][2] + '-' + descr_str
-
-    if config['debug']:
-        descr_str += '_' + ''.join([k for k, v in config.items() if k.startswith('d_') and v])
-    else:
-        descr_str += '_' + ('all_data' if config['use_all_experiments'] else 'small')
-
-    return descr_str
-
-
-def model_config_description(config, short=False):
-    valus_of_interest = [
-        ("epochs", "e", config['epochs']),
-        ("loss_weight_recon", "lwr", config['loss_weight_reconstruction']),
-        ("loss_weight_kl", "lwkl", config['loss_weight_kl']),
-    ]
-
-    descr_idx = 1 if short else 0
-
-    return '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest))
-
-
-def exp_desc(run_config, model_config, short=False):
-    return config_description(run_config, short=short) + '-' + model_config_description(model_config, short=short)
-
-def get_config_hash(config, digest_length=5):
-    return str(hash(json.dumps({**config, '_executed_at_': str(datetime.now())}, sort_keys=True)))[:digest_length]
+    @classmethod
+    def ANGLE_3D(cls):
+        return cls(data_type=DataType.ANGLE_3D)

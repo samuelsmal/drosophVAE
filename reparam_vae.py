@@ -13,6 +13,7 @@
 
 import json
 from collections import namedtuple
+from functools import partial
 import itertools
 import warnings
 import os
@@ -56,6 +57,8 @@ import som_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
+from som_vae.settings.config import SetupConfig, RunConfig
+from som_vae import data_loading
 from som_vae import settings
 from som_vae import preprocessing
 from som_vae.helpers.misc import extract_args, chunks, foldl, if_last
@@ -69,6 +72,15 @@ from som_vae.helpers.logging import enable_logging
 # <codecell>
 
 jupyter.fix_layout()
+
+# <codecell>
+
+setup_cfg = SetupConfig()
+run_cfg = RunConfig()
+
+# <codecell>
+
+frame_data, frame_labels = data_loading.load_labelled_data(run_config=run_cfg, setup_config=setup_cfg)
 
 # <markdowncell>
 
@@ -90,66 +102,6 @@ print(f"this is the main experiment, study, and fly id: {config.full_experiment_
 
 config.positional_data(SD.EXPERIMENTS[0]).shape
 
-# <codecell>
-
-_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
-_FLY_BLACK_LIST_ = ['180920_aDN_PR-Fly2-005_SG1', '180921_aDN_CsCh-Fly6-003_SG1'] # for those flys the angle conversion give odd results,
-                                                                                  # and their distributions seem way off compared to the others)
-
-
-_DATA_TYPE_3D_ANGLE_ = '3d_angle'
-_DATA_TYPE_2D_POS_ = '2d_pos'
-_SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
-
-_MODEL_IMPL_TEMPORAL_CONV_ = 'temp_conv'
-_MODEL_IMPL_PADD_CONV_ = 'padd_conv'
-_MODEL_IMPL_SKIP_CON_ = 'skip_padd_conv' 
-
-run_config = {
-    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
-    'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
-    'd_sinoid_data': False, 
-    'd_sinoid_cluster_data': True,
-    'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
-    'use_all_experiments': False,
-    'data_type': _DATA_TYPE_3D_ANGLE_,
-    'use_time_series': True,       # triggers time series application, without this the model is only dense layers
-    'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
-    'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'latent_dim': None,               # should be adapted given the input dim
-    'batch_size': 128,
-    'loss_weight_reconstruction': 1.0, # will be adjusted further down (currently)
-    'loss_weight_kl': 0.0,             # will be adjusted further down (currently)
-    'dropout_rate': 0.,
-    'with_batch_norm': True,
-    'model_impl': _MODEL_IMPL_SKIP_CON_
-}
-
-# And now the ... ugly parts begin. -> TODO put this in a class, 
-
-if run_config['use_all_experiments']:
-    # takes way too long otherwise
-    run_config['batch_size'] = 1024
-
-if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
-    raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
-    
-if run_config['n_conv_layers'] is None:
-    run_config['n_conv_layers'] = np.int(np.ceil(np.log2((run_config['time_series_length'] - 1) / (2 * (run_config['conv_layer_kernel_size'] - 1)) + 1)))
-
-if run_config['conv_layer_kernel_size'] is None:
-    raise NotImplementedError('ups')
-    
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    # goes from 15 * 2 = 30 -> 8
-    run_config['latent_dim'] = 8
-elif run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-    # goes from 18 -> 4
-    run_config['latent_dim'] = 4
-else:
-    raise ValueError(f"this data_type is not supported: {run_config['data_type']}")
-
 # <markdowncell>
 
 # ## Loading of 2d positional data
@@ -163,12 +115,6 @@ def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
                                     .map(lambda pair: list(reversed(pair[0])))\
                                     .map(lambda ls: SD.Experiment._make([*ls, SD._key_from_list_(ls)]))\
                                     .to_list()
-
-# <codecell>
-
-from collections import namedtuple
-
-Data = namedtuple('Data', 'joint_positions normalisation_factors image_paths labels')
 
 # <codecell>
 
@@ -261,15 +207,121 @@ if run_config['data_type'] == _DATA_TYPE_2D_POS_:
 
 # <codecell>
 
+def _load_and_fix_(sequence, data):
+    # I have no clue why I need to do this. Semihg knows of this data problem.
+    e = min(sequence.sequence[1], data.shape[0])
+    s = config.LabelledSequence(**{**sequence._asdict(), 
+                                   'sequence': (sequence.sequence[0], e)})
+    
+    d = data[sequence.sequence[0]:e]
+    
+    return s, d
+                
+    
+def load_labelled_data(data_type):
+    """
+    Parameters
+    ----------
+        data_type
+            
+    Returns
+    -------
+        frame_data, one single numpy array
+        frame_labels, lookup table (frame_data_pos, Label)
+    """
+    if data_type not in _SUPPORTED_DATA_TYPES_:
+        raise ValueError('no can do')
+        
+    dim = '3d' if data_type == _DATA_TYPE_3D_ANGLE_ else '2d'
+        
+    # dict of experiments and their data
+    data_raw = seq(settings.data.EXPERIMENTS)\
+                       .map(lambda x: (settings.data._key_(x), config.positional_data(x, dimensions=dim)))\
+                       .filter(lambda x: x[1] is not None).to_dict()
+
+    sequence_labels, sequence_data = zip(*seq(settings.data.LABELLED_DATA).filter(lambda x: settings.data._key_(x) in data_raw)\
+                                                             .map(lambda x: _load_and_fix_(x, data_raw[settings.data._key_(x)])))
+    frame_data = np.vstack(sequence_data)
+    frame_labels = seq(sequence_labels).flat_map(lambda x: [(i, x) for i in range(*x.sequence)]).to_list()
+    
+    #return sequence_data, frame_labels, sequence_labels
+    return frame_data, frame_labels
+
+# <codecell>
+
+def load_labelled_3d_angle_data(variance_threshold=0., blacklist_labels=None, normalize=True):
+    """
+    Parameters
+    ----------
+        variance_threshold (float): Columns with a threshold higher than this will be selected, 
+            if None all columns will be selected
+        blacklist_labels (list(Label)): List of Labels to ignore, 
+            e.g. [config._BehaviorLabel_.REST, config._BehaviorLabel_.NONE] (the default)
+            set to an empty list if you want all frames
+            
+    Returns
+    -------
+        
+    """
+    frame_data, frame_labels = load_labelled_data(_DATA_TYPE_3D_ANGLE_)
+    
+    data_angle_raw = SD.convert_3d_to_angle(frame_data)
+    
+    if variance_threshold is not None:
+        selected_cols = np.where(np.var(sequence_data, axis=0) > threshold)[0]
+        frame_data = frame_data[:, selected_cols]
+    else:
+        selected_cols = np.arange(sequence_data.shape[1])
+    
+    column_names = SD.get_3d_columns_names(selected_cols)
+    
+    if blacklist_labels is None:
+        # for some reason the types are no longer the same? beats me
+        blacklist_labels = [l.value for l in [config._BehaviorLabel_.REST, config._BehaviorLabel_.NONE]]
+    if len(blacklist_labels) > 0:
+        black_idx = np.array(seq(frame_labels).map(lambda x: x[1].label.value in blacklist_labels).to_list())
+        
+        frame_data = frame_data[~black_idx]
+        frame_labels = np.array(frame_labels)[~black_idx]
+        
+    if normalize:
+        frame_data, normalisation_factors = preprocessing.normalize(frame_data)
+    else:
+        normalisation_factors = None
+    
+    return frame_data, frame_labels, column_names, normalisation_factors
+
+# <codecell>
+
+fd, fl, cn, nf = load_3d_angle_data()
+
+# <codecell>
+
+
+    threshold = 0.
+    selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
+    
+    angled_data_columns = SD.get_3d_columns_names(selected_cols)
+    #f = plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns)
+    #f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
+    #plt.subplots_adjust(top=0.97)
+
+    # TODO not so sure here, should we really normalize the data?
+    joint_positions, normalisation_factors = preprocessing.normalize(data_angle_raw[:, selected_cols][frames_of_interest])
+
+# <codecell>
+
 if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_experiments']:
-    data_angle = np.vstack(seq(settings.data.EXPERIMENTS).map(lambda x: settings.config.positional_data(x, dimensions='3d')))
+    data_angle = seq(settings.data.EXPERIMENTS)\
+                           .map(lambda x: (x, config.positional_data(x, dimensions='3d')))\
+                           .filter(lambda x: x is not None))
 
     #
     # Using man-made selection (from Semigh)
     #
     data_angle_raw = SD.convert_3d_to_angle(data_angle)
-    warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-    frames_of_interest = frames_of_interest[:len(data_angle_raw)]
+    #warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
+    #frames_of_interest = frames_of_interest[:len(data_angle_raw)]
     
     selected_cols = [2,7,12, 19+2, 19+4, 19+12]
     angled_data_columns = SD.get_3d_columns_names(selected_cols)
