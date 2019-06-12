@@ -117,7 +117,7 @@ class RunConfig(BaseConfig):
         'd_sinoid_cluster_data': True,
         'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input.
                                        # allowing the model to learn the identity function.
-        'use_single_fly': False,
+        'use_single_fly': True,
         'data_type': DataType.ANGLE_3D,
         'use_time_series': True,       # triggers time series application, without this the model is only dense layers
         'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
@@ -142,7 +142,8 @@ class RunConfig(BaseConfig):
             }
         },
         'pos_2d_params': {
-        }
+        },
+        'model_created_at': None
     }
 
     def __init__(self, **kwargs):
@@ -171,34 +172,36 @@ class RunConfig(BaseConfig):
         else:
             raise ValueError(f"this data_type is not supported: {self['data_type']}")
 
-    def description(self, short=True):
+    def description(self, short=True, verbosity=4):
         def _bool_(v):
             return 'T' if self[v] else 'F'
 
         valus_of_interest = [
+            ('model_impl', 'mi', self.get('model_impl').name),
             ('data', '', self['data_type'].name),
             ('time', 't', self['time_series_length'] if self['use_time_series'] else 'F'),
-            ('kernel', 'k', self['conv_layer_kernel_size']),
-            ('n_clayers', 'ncl', self['n_conv_layers']),
             ('latent_dim', 'ld', self['latent_dim']),
             ('use_single_fly', 'mf', _bool_('use_single_fly')),
-            ('optimizer', 'opt', self.get('optimizer')),
             ('loss_weight_recon', 'lwr', self.get('loss_weight_reconstruction')),
             ('loss_weight_kl', 'lwkl', self.get('loss_weight_kl')),
             ('dropout_rate', 'dr', self.get('dropout_rate')),
-            ('model_impl', 'mi', self.get('model_impl').name),
-            ('with_batch_norm', 'bn', _bool_('with_batch_norm'))
+            ('kernel', 'k', self['conv_layer_kernel_size']),
+            ('optimizer', 'opt', self.get('optimizer')),
+            ('with_batch_norm', 'bn', _bool_('with_batch_norm')),
+            ('n_clayers', 'ncl', self['n_conv_layers']),
         ]
 
-        descr_idx = 1 if short else 0
-        descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest[1:]))
+        valus_of_interest = valus_of_interest[:verbosity]
 
-        descr_str = valus_of_interest[0][2] + '-' + descr_str
+        descr_idx = 1 if short else 0
+        descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest))
+
 
         if self['debug']:
             descr_str += '_' + ''.join([k for k, v in self.items() if k.startswith('d_') and v])
-        else:
-            descr_str += '_' + ('single_fly' if self['use_single_fly'] else 'labelled')
+
+        if self['model_created_at']:
+            descr_str += '_' + self['model_created_at']
 
         return descr_str
 

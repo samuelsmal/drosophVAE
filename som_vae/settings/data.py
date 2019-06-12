@@ -24,8 +24,6 @@ def experiment_key(study_id=None, experiment_id=None, fly_id=None, obj=None):
 
     if obj:
         return f"{obj.study_id}-{obj.experiment_id}-{obj.fly_id}"
-    elif labelled_sequence is not None:
-        return experiment_key(experiment=labelled_sequence.experiment)
     else:
         return f"{study_id}-{experiment_id}-{fly_id}"
 

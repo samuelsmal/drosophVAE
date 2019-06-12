@@ -454,7 +454,6 @@ from matplotlib import gridspec
 
 def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs):
     cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-    labels = np.array([ls.label.name for frame_id, ls in y[back_to_single_time]])
     fig = plt.figure(figsize=(20, 18))
     gs = gridspec.GridSpec(3, 2, figure=fig)
     ax1 = plt.subplot(gs[:2, :])
@@ -470,7 +469,7 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
                         label=cluster, 
                         ax=ax1,
                         color=cluster_colors[cluster], 
-                        style=labels[c_idx],
+                        style=y[c_idx, -1],
                         legend=False)
         sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2, legend=False)
         sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3, legend=False)
@@ -600,20 +599,12 @@ dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
-grid_search_results
-
-# <codecell>
-
-stop
-
-# <codecell>
-
 reload(vae_training)
 epochs = 4
 eval_steps = 2
 vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
 vae_training_results = {}
-cluster_assignments = []
+eval_results = []
 for u in range(np.int(epochs / eval_steps)):
     vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
                                               train_dataset=train_dataset, 
@@ -621,17 +612,11 @@ for u in range(np.int(epochs / eval_steps)):
                                               early_stopping=False,
                                               n_epochs=eval_steps)
 
-    cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
+    eval_results += [eval_model(vae_training_results, X, X_eval, y, run_cfg)]
 
-cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
+eval_results += [eval_model(vae_training_results, X, X_eval, y, run_cfg)]
 
-# <codecell>
-
-_t = (vae_training_results['train_reports'], vae_training_results['test_reports'])
-
-# <codecell>
-
-vae_training_results
+plt.close() # not sure, but this might prevent erros
 
 # <codecell>
 
