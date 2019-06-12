@@ -465,7 +465,55 @@ def eval_model(training_results, X, X_eval, run_config):
 
 # <codecell>
 
+from hdbscan import HDBSCAN
+from collections import namedtuple
+from sklearn.manifold import TSNE
+
+LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
+
+# <codecell>
+
+def get_latent_space(model, X):
+    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
+    else:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
+
+from matplotlib import gridspec
+
+def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_config, epochs):
+    labels = np.array([ls.label.name for frame_id, ls in y[back_to_single_time]])
+    fig = plt.figure(figsize=(20, 18))
+    gs = gridspec.GridSpec(3, 2, figure=fig)
+    ax1 = plt.subplot(gs[:2, :])
+    ax2 = plt.subplot(gs[-1:, :1])
+    ax3 = plt.subplot(gs[-1:, 1:])
+
+    #plt.figure(figsize=(20, 12))
+    #fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
+    for cluster in np.unique(cluster_assignments):
+        c_idx = cluster_assignments == cluster
+        sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
+                        X_latent_mean_tsne_proj[c_idx, 1], 
+                        label=cluster, 
+                        ax=ax1,
+                        color=cluster_colors[cluster], 
+                        style=labels[c_idx],
+                        legend=False)
+        sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2, legend=False)
+        sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3, legend=False)
+
+    ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
+    ax2.set_title('mean')
+    ax3.set_title('var')
+    
+    plt.savefig(f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_latent_space_tsne.png")
+
+# <codecell>
+
 X = np.vstack((X_train, X_test))
+y = np.vstack((y_train, y_test))
+
 X_train_dataset= to_tf_data(X_train, batch_size=run_cfg['batch_size'])
 X_test_dataset = to_tf_data(X_test, batch_size=run_cfg['batch_size']) 
 
@@ -492,6 +540,14 @@ for _ in range(8):
                                               n_epochs=25)
 
     eval_model(vae_training_results, X, X_eval, run_cfg)
+    
+    X_latent = get_latent_space(vae_training_results['model'], X)
+    X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
+
+    cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+    cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+
+    plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_cfg, epochs=len(vae_training_results['train_reports']))
 
 # <codecell>
 
@@ -518,23 +574,19 @@ for _ in range(8):
 
 # <codecell>
 
-# losses
-for a, n in zip(range(train_reports.shape[1]), ['a', 'b', 'c']):
-    plt.subplot(train_reports.shape[1] + 1, 1, a + 1)
-    plt.plot(train_reports[:, a], label=f"train_{n}")
-    plt.plot(test_reports[:, a], label=f"test_{n}")
-    plt.title(n)
-    
-plt.tight_layout()
-plt.legend()
+## losses
+#for a, n in zip(range(train_reports.shape[1]), ['a', 'b', 'c']):
+#    plt.subplot(train_reports.shape[1] + 1, 1, a + 1)
+#    plt.plot(train_reports[:, a], label=f"train_{n}")
+#    plt.plot(test_reports[:, a], label=f"test_{n}")
+#    plt.title(n)
+#    
+#plt.tight_layout()
+#plt.legend()
 
 # <codecell>
 
 #plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
-
-# <codecell>
-
-
 
 # <codecell>
 
@@ -586,103 +638,41 @@ plt.legend()
 
 # <codecell>
 
-from hdbscan import HDBSCAN
+#plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_cfg, epochs=len(vae_training_results['train_reports']))
 
 # <codecell>
 
-from collections import namedtuple
-from sklearn.manifold import TSNE
-
-LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
-
-if run_config['use_all_experiments']:
-    warnings.warn('should use all data `input_data`')
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-    else:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-else:
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
-    else:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw)))
-    
-X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
-
-# <codecell>
-
-cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
-cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-
-# <codecell>
-
-from matplotlib.collections import LineCollection
-
-def plot_debug(input_data, cluster_assignments, cluster_colors=None):
-    _clusters = np.unique(cluster_assignments)
-    _colors = sns.color_palette(n_colors=len(_clusters))
-    if cluster_colors is None:
-        cluster_colors = dict(zip(_clusters, _colors))
-        
-    lines, colors = zip(*[([(x, input_data[x, 0]) for x in segment], cluster_colors[cluster_id])
-                           for cluster_id, segments in video.group_by_cluster(cluster_assignments).items() 
-                           for segment in segments])
-
-
-    
-    fig, ax = plt.subplots(figsize=(10, 8))
-    coll = LineCollection(lines, colors=colors)
-    #coll.set_array(np.random.random(xy.shape[0]))
-
-    ax.add_collection(coll)
-    ax.autoscale_view()
-
-    plt.title('Input data and cluster assigment using debug data');
-    
-if run_config['debug']:
-    plot_debug(input_data, cluster_assignments)
-
-# <codecell>
-
-exp_desc_short
+#from matplotlib.collections import LineCollection
+#
+#def plot_debug(input_data, cluster_assignments, cluster_colors=None):
+#    _clusters = np.unique(cluster_assignments)
+#    _colors = sns.color_palette(n_colors=len(_clusters))
+#    if cluster_colors is None:
+#        cluster_colors = dict(zip(_clusters, _colors))
+#        
+#    lines, colors = zip(*[([(x, input_data[x, 0]) for x in segment], cluster_colors[cluster_id])
+#                           for cluster_id, segments in video.group_by_cluster(cluster_assignments).items() 
+#                           for segment in segments])
+#
+#
+#    
+#    fig, ax = plt.subplots(figsize=(10, 8))
+#    coll = LineCollection(lines, colors=colors)
+#    #coll.set_array(np.random.random(xy.shape[0]))
+#
+#    ax.add_collection(coll)
+#    ax.autoscale_view()
+#
+#    plt.title('Input data and cluster assigment using debug data');
+#    
+#if run_cfg['debug']:
+#    plot_debug(input_data, cluster_assignments)
 
 # <codecell>
 
 # TODO
 # use this to add a different shape to the scatter plot
 # frames_idx_with_labels[:len(frames_of_interest)][frames_of_interest][run_config['time_series_length'] - 1:]['label'].apply(lambda x: x.value)
-
-# <codecell>
-
-from matplotlib import gridspec
-
-labels = frames_idx_with_labels['label'].apply(lambda x: x.name)
-
-fig = plt.figure(figsize=(20, 18))
-gs = gridspec.GridSpec(3, 2, figure=fig)
-ax1 = plt.subplot(gs[:2, :])
-ax2 = plt.subplot(gs[-1:, :1])
-ax3 = plt.subplot(gs[-1:, 1:])
-
-#plt.figure(figsize=(20, 12))
-#fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
-for cluster in np.unique(cluster_assignments):
-    c_idx = cluster_assignments == cluster
-    if run_config['use_all_experiments']:
-        c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
-    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
-                    X_latent_mean_tsne_proj[c_idx, 1], 
-                    label=cluster, 
-                    ax=ax1,
-                    color=cluster_colors[cluster], 
-                    style=labels[run_config['time_series_length'] - 1:][c_idx],
-                    legend='brief')
-    sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2)
-    sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3)
-    
-ax1.set_title('T-SNE proejection of latent space (mean & var stacked)')
-ax2.set_title('mean')
-ax3.set_title('var');
 
 # <markdowncell>
 
@@ -702,23 +692,6 @@ def video_prep_raw_data(data):
     
 def video_prep_recon_data(input_data):
     return reverse_pos_pipeline(scaler.inverse_transform(model(input_data).numpy()).reshape(-1, 15, 2))
-
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    _positional_data_ = [reverse_pos_pipeline(input_data, normalisation_factors=normalisation_factors), 
-                         reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
-else:
-    raise NotImplementedError('give me a break')
-    
-p = video.comparision_video_of_reconstruction(_positional_data_,
-                                              images_paths_for_experiments=images_paths_for_experiments, 
-                                              n_train=len(data_train),
-                                              cluster_assignments=cluster_assignments,
-                                              as_frames=False,
-                                              exp_desc=exp_desc_short)
-
-display_video(p)
 
 # <codecell>
 

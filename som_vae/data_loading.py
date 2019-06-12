@@ -52,9 +52,11 @@ def load_labelled_data(run_config, setup_config):
                                .filter(lambda x: x[1] is not None)\
                                .to_dict()
 
-    sequence_labels, sequence_data = zip(*seq(LABELLED_SEQUENCES).filter(lambda x:
-                                                                         experiment_key(obj=x) in data_raw)\
-                                                             .map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)])))
+    sequence_labels, sequence_data = zip(*seq(LABELLED_SEQUENCES)
+                                         .filter(lambda x: experiment_key(obj=x) in data_raw)\
+                                         .filter(lambda x: x.label not in
+                                                 run_config['blacklist_behavior'])\
+                                         .map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)])))
     frame_data = np.vstack(sequence_data)
     frame_labels = seq(sequence_labels).flat_map(lambda x: [(i, x) for i in range(*x.sequence)]).to_list()
 

@@ -110,13 +110,13 @@ class SetupConfig(BaseConfig):
 
 class RunConfig(BaseConfig):
     DEFAULT_VALUES = {
-        'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
+        'debug': False,                 # general flag for debug mode, triggers all `d_.*`-options.
         'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
         'd_sinoid_data': False,
         'd_sinoid_cluster_data': True,
         'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input.
                                        # allowing the model to learn the identity function.
-        'use_single_fly': True,
+        'use_single_fly': False,
         'data_type': DataType.ANGLE_3D,
         'use_time_series': True,       # triggers time series application, without this the model is only dense layers
         'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
