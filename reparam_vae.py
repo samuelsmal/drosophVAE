@@ -193,6 +193,11 @@ frame_data, frame_labels, selected_columns, normalisation_factors = preprocessin
 #    plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
 #    used_until += l
 
+# <codecell>
+
+def to_int_value(frame_with_label):
+    return np.array([l.label.value for l in frame_with_label[:,1]])
+
 # <markdowncell>
 
 # # preprocessing
@@ -205,8 +210,8 @@ n_train_data_points = int(frame_data.shape[0] * run_cfg['train_test_ratio'])
 
 X_train = scaler.fit_transform(frame_data[:n_train_data_points])
 X_test = scaler.transform(frame_data[n_train_data_points:])
-y_train = frame_labels[:n_train_data_points]
-y_test = frame_labels[n_train_data_points:]
+y_train = to_int_value(frame_labels[:n_train_data_points])
+y_test = to_int_value(frame_labels[n_train_data_points:])
 
 if run_cfg['use_time_series']:
     X_train, X_test, y_train, y_test = [misc.to_time_series_np(x, sequence_length=run_cfg['time_series_length']) 
@@ -541,8 +546,8 @@ def eval_model(training_results, X, X_eval, y, run_config):
 X = np.vstack((X_train, X_test))
 y = np.vstack((y_train, y_test))
 
-X_train_dataset= to_tf_data(X_train, batch_size=run_cfg['batch_size'])
-X_test_dataset = to_tf_data(X_test, batch_size=run_cfg['batch_size']) 
+train_dataset = to_tf_data(X_train, y_train, batch_size=run_cfg['batch_size'])
+test_dataset = to_tf_data(X_test, y_test, batch_size=run_cfg['batch_size']) 
 
 if run_cfg['use_time_series']:
     back_to_single_time = np.s_[:, -1, :]
@@ -553,37 +558,57 @@ X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 # <codecell>
 
-from itertools import product
-
-#grid_search_params = {
-#    'model_impl': [config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV, config.ModelType.PADD_CONV],
-#    'latent_dim': [2, 8, 16]
-#}
-#
-#def grid_search(grid_search_params, eval_steps=2, epochs=5):
-#    parameters = product(*grid_search_params.values())
-#
-#    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
-#
-#    for p, cfg in cfgs:
-#        # this allows continuous training with a fixed number of epochs. uuuh yeah.
-#        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
-#        vae_training_results = {}
-#        cluster_assignments = []
-#        for u in range(np.int(epochs / eval_steps)):
-#            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-#                                                      train_dataset=X_train_dataset, 
-#                                                      test_dataset=X_test_dataset,
-#                                                      early_stopping=False,
-#                                                      n_epochs=eval_steps)
-#
-#            cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
-#        
-#        cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
-#        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], cluster_assignments
+reload(vae_training)
 
 # <codecell>
 
+from itertools import product
+
+grid_search_params = {
+    'model_impl': [config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV, config.ModelType.PADD_CONV],
+    'latent_dim': [2, 8, 16]
+}
+
+def grid_search(grid_search_params, eval_steps=2, epochs=8):
+    parameters = product(*grid_search_params.values())
+    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
+
+    for p, cfg in cfgs:
+        # this allows continuous training with a fixed number of epochs. uuuh yeah.
+        # there is however a side-effect problem here. I am running this on a GPU, `init` and `train` need to be called in order.
+        # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
+        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+        vae_training_results = {}
+        cluster_assignments = []
+        for u in range(np.int(epochs / eval_steps)):
+            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                      train_dataset=train_dataset, 
+                                                      test_dataset=test_dataset,
+                                                      early_stopping=False,
+                                                      n_epochs=eval_steps)
+
+            cluster_assignments += [eval_model(vae_training_results, X, X_eval, y, cfg)]
+        
+        cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
+        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], cluster_assignments
+
+# <codecell>
+
+grid_search_results = list(grid_search(grid_search_params))
+
+dump_results(grid_search_results, 'grid_search_only_vae')
+
+# <codecell>
+
+grid_search_results
+
+# <codecell>
+
+stop
+
+# <codecell>
+
+reload(vae_training)
 epochs = 4
 eval_steps = 2
 vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
@@ -591,20 +616,14 @@ vae_training_results = {}
 cluster_assignments = []
 for u in range(np.int(epochs / eval_steps)):
     vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                              train_dataset=X_train_dataset, 
-                                              test_dataset=X_test_dataset,
+                                              train_dataset=train_dataset, 
+                                              test_dataset=test_dataset,
                                               early_stopping=False,
                                               n_epochs=eval_steps)
 
     cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
 
 cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
-
-# <codecell>
-
-grid_search_results = list(grid_search(grid_search_params))
-
-dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 

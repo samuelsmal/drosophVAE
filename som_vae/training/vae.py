@@ -76,8 +76,8 @@ def compute_loss_for_data(model, data):
     loss = tfe.metrics.Mean()
     recon = tfe.metrics.Mean()
     kl = tfe.metrics.Mean()
-    for batch in data:
-        loss_b, recon_b, kl_b  = compute_loss(model, batch, detailed=True)
+    for batch_x, _ in data:
+        loss_b, recon_b, kl_b  = compute_loss(model, batch_x, detailed=True)
         loss(loss_b)
         recon(recon_b)
         kl(kl_b)
@@ -88,7 +88,7 @@ def compute_loss_for_data(model, data):
 
     return total_loss, total_recon, total_kl
 
-def compute_gradients(model, x):
+def compute_gradients(model, x, y):
     with tf.GradientTape() as tape:
         loss = compute_loss(model, x)
         return tape.gradient(loss, model.trainable_variables), loss

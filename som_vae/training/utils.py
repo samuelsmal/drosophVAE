@@ -48,6 +48,7 @@ def train(model,
 
     cur_min_val_idx = 0
     epoch = len(train_reports)
+    print('epoch', epoch)
 
     with warnings.catch_warnings():
         # pesky tensorflow again
@@ -55,8 +56,8 @@ def train(model,
         for _ in range(n_epochs):
             try:
                 start_time = time.time()
-                for train_x in train_dataset:
-                    gradients, loss = gradient_fn(model, train_x)
+                for train_x, train_y in train_dataset:
+                    gradients, loss = gradient_fn(model, train_x, train_y)
                     apply_gradients(optimizer, gradients, model.trainable_variables)
                 end_time = time.time()
 
