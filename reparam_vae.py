@@ -201,12 +201,12 @@ frame_data, frame_labels, selected_columns, normalisation_factors = preprocessin
 
 scaler = StandardScaler()
 
-n_data_points = int(frame_data.shape[0] * run_cfg['train_test_ratio'])
+n_train_data_points = int(frame_data.shape[0] * run_cfg['train_test_ratio'])
 
-X_train = scaler.fit_transform(frame_data[:n_data_points])
-X_test = frame_data[n_data_points:] 
-y_train = frame_labels[:n_data_points]
-y_test = frame_labels[n_data_points:]
+X_train = scaler.fit_transform(frame_data[:n_train_data_points])
+X_test = scaler.transform(frame_data[n_train_data_points:])
+y_train = frame_labels[:n_train_data_points]
+y_test = frame_labels[n_train_data_points:]
 
 if run_cfg['use_time_series']:
     X_train, X_test, y_train, y_test = [misc.to_time_series_np(x, sequence_length=run_cfg['time_series_length']) 
@@ -418,17 +418,80 @@ reload(supervised_training)
 
 # <codecell>
 
+def _reshape_and_rescale_(X, scaler=scaler, data_type=run_cfg['data_type']):
+    """To be defined in this notebook / function. Basically a larger lambda function
+    """
+    rescaled = scaler.inverse_transform(X)
+    if data_type ==  config.DataType.POS_2D:
+        return rescaled.reshape(-1, 15, 2)
+    elif data_type ==  config.DataType.ANGLE_3D:
+        return rescaled
+    else:
+        raise ValueError(f"uh, got something odd: {data_type}")
+
+# <codecell>
+
+def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=run_cfg):
+    xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
+    fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+    for i, cn in enumerate(data_loading.get_3d_columns_names(selected_columns)):
+        _idx_ = np.s_[:, i]
+        axs[i].plot(xticks, X_eval[_idx_], label='input')
+        axs[i].plot(xticks, X_hat_eval[_idx_], label='reconstructed')
+
+        axs[i].set_title(cn)
+
+    axs[-1].set_xlabel('time [min]')
+    axs[0].legend(loc='upper left')
+    
+    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+    plt.suptitle(f"Comparision of selection of data\n({run_config.description()}_e-{epochs})")
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.94)
+    plt.savefig(f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png")
+
+def eval_model(training_results, X, X_eval, run_config):
+    model = training_results['model']
+    #train_reports = training_results['train_report']
+    #test_reports= training_results['test_report']
+
+    exp_desc = run_config.description(short=False)
+    exp_desc_short = run_config.description()
+
+    X_hat_eval = _reshape_and_rescale_(model(X, apply_sigmoid=False).numpy()[back_to_single_time])
+    
+    plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, len(training_results['train_reports']))
+
+# <codecell>
+
+X = np.vstack((X_train, X_test))
 X_train_dataset= to_tf_data(X_train, batch_size=run_cfg['batch_size'])
 X_test_dataset = to_tf_data(X_test, batch_size=run_cfg['batch_size']) 
 
-vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-model = vae_training_args['model']
+if run_cfg['use_time_series']:
+    back_to_single_time = np.s_[:, -1, :]
+else:
+    back_to_single_time = np.s_[:]
+    
+X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
-vae_training_results = vae_training.train(**vae_training_args,
-                                          train_dataset=X_train_dataset, 
-                                          test_dataset=X_test_dataset,
-                                          early_stopping=False,
-                                          n_epochs=10)
+# <codecell>
+
+vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+vae_training_results = {}
+
+# <codecell>
+
+# this allows continuous training with a fixed number of epochs. uuuh yeah.
+for _ in range(8):
+    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                              train_dataset=X_train_dataset, 
+                                              test_dataset=X_test_dataset,
+                                              early_stopping=False,
+                                              n_epochs=25)
+
+    eval_model(vae_training_results, X, X_eval, run_cfg)
 
 # <codecell>
 
@@ -449,37 +512,9 @@ vae_training_results = vae_training.train(**vae_training_args,
 
 # <codecell>
 
-def _reverse_to_original_shape_(X):
-    rescaled = scaler.inverse_transform(X)
-    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        return rescaled.reshape(-1, 15, 2)
-    else:
-        return rescaled
-
-# <codecell>
-
-# data pipeline for evaluation
-
-exp_desc = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)})
-exp_desc_short = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)}, short=True)
-input_data_raw = np.vstack((data_train, data_test))
-
-if run_config['use_time_series']:
-    back_to_single_time = np.s_[:, -1, :]
-else:
-    back_to_single_time = np.s_[:]
-    
-
-input_data = _reverse_to_original_shape_(input_data_raw[back_to_single_time])
-reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[back_to_single_time])
-    
-_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
-generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time])[:len(reconstructed_data)]
-
-# <codecell>
-
-train_reports = vae_training_results['train_report']
-test_reports= vae_training_results['test_report']
+#_min_nb_batches_for_sample_length_ = int(np.ceil(len(X) / run_cfg['batch_size']))
+#X_gen_eval = np.vstack([model.sample().numpy()  for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time]
+#X_gen_eval = _reshape_and_rescale_(X_gen_eval[:len(X)])
 
 # <codecell>
 
@@ -499,57 +534,51 @@ plt.legend()
 
 # <codecell>
 
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data,
-                                                                 reconstructed_data,
-                                                                 generated_data,
-                                                                 validation_cut_off=len(data_train),
-                                                                 exp_desc=exp_desc_short);
-else:
-    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
-    if run_config['use_all_experiments']:
-        start = 100
-        end = 1000
-    else:
-        start = 0
-        end = len(input_data)
-    xticks = np.arange(start, end)
-    if run_config['debug']:
-        _input_data = input_data_raw[:, :, 0]
-        _recon = model(input_data_raw, apply_sigmoid=False).numpy()[:, :, 0]
-        fig, axs = plt.subplots(nrows=_input_data.shape[-1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i in range(_input_data.shape[-1]):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, _input_data[_idx_], label='input')
-            axs[i].plot(xticks, _recon[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
 
-            #axs[i].set_title(cn)
 
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-    else:
-        fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, input_data[_idx_], label='input')
-            axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
+# <codecell>
 
-            axs[i].set_title(cn)
-
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-
-    axs[-1].set_xlabel('time step')
-    axs[0].legend(loc='upper left')
-    
-    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.94)
-    plt.savefig(f"./figures/{exp_desc_short}_input_gen_recon_comparision.png")
+#if run_cfg['data_type'] == config.DataType.POS_2D:
+#    fig = plots.plot_comparing_joint_position_with_reconstructed(X_eval,
+#                                                                 X_hat_eval,
+#                                                                 X_gen_eval,
+#                                                                 validation_cut_off=n_train_data_points,
+#                                                                 exp_desc=exp_desc_short);
+#else:
+#    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
+#    if run_cfg['use_single_fly']:
+#        start = 0
+#        end = len(X_eval)
+#    else:
+#        start = 100
+#        end = 1000
+#    xticks = np.arange(start, end) / SetupConfig.value('frames_per_second') / 60.
+#    if run_cfg['debug']:
+#        _input_data = X[:, :, 0]
+#        _recon = model(X, apply_sigmoid=False).numpy()[:, :, 0]
+#        fig, axs = plt.subplots(nrows=_input_data.shape[-1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+#        for i in range(_input_data.shape[-1]):
+#            _idx_ = np.s_[start:end, i]
+#            axs[i].plot(xticks, _input_data[_idx_], label='input')
+#            axs[i].plot(xticks, _recon[_idx_], label='reconstructed')
+#    else:
+#        fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+#        for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
+#            _idx_ = np.s_[start:end, i]
+#            axs[i].plot(xticks, X_eval[_idx_], label='input')
+#            axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
+#
+#            axs[i].set_title(cn)
+#
+#    axs[-1].set_xlabel('time [min]')
+#    axs[0].legend(loc='upper left')
+#    
+#    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+#    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
+#    
+#    plt.tight_layout()
+#    plt.subplots_adjust(top=0.94)
+#    plt.savefig(f"./figures/{exp_desc_short}_input_gen_recon_comparision.png")
 
 # <markdowncell>
 

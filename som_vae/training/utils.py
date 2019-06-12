@@ -63,6 +63,8 @@ def train(model,
                 train_reports += [loss_report_fn(model, train_dataset)]
                 test_reports += [loss_report_fn(model, test_dataset)]
 
+                # this is a bit tricky here. zip takes the shortest of them (which is what we want
+                # to support multiple training gradients and loss functions
                 _recorded_scalars_ =  ['loss', 'recon', 'kl']
                 tf_helpers.tf_write_scalars(train_summary_writer, zip(_recorded_scalars_, train_reports[-1]), step=epoch)
                 tf_helpers.tf_write_scalars(test_summary_writer,  zip(_recorded_scalars_, test_reports[-1]),  step=epoch)
@@ -98,6 +100,6 @@ def train(model,
 
     return {'model': model,
             'optimizer': optimizer,
-            'train_report':np.array(train_reports),
-            'test_report': np.array(test_reports)}
+            'train_reports':np.array(train_reports),
+            'test_reports': np.array(test_reports)}
 
