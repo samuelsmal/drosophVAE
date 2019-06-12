@@ -1,3 +1,4 @@
+import pathlib
 from enum import Enum
 import numpy as np
 import socket
@@ -51,3 +52,34 @@ class EEnum(Enum):
     @classmethod
     def list(cls):
         return list(map(lambda c: c.name, cls))
+
+
+def create_parents(path):
+    pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def interpolate_arrays(arr1, arr2, num_steps=100, interpolation_length=0.3):
+    """Interpolates linearly between two arrays over a given number of steps.
+    The actual interpolation happens only across a fraction of those steps.
+
+    Args:
+        arr1 (np.array): The starting array for the interpolation.
+        arr2 (np.array): The end array for the interpolation.
+        num_steps (int): The length of the interpolation array along the newly created axis (default: 100).
+        interpolation_length (float): The fraction of the steps across which the actual interpolation happens (default: 0.3).
+
+    Returns:
+        np.array: The final interpolated array of shape ([num_steps] + arr1.shape).
+    """
+    assert arr1.shape == arr2.shape, "The two arrays have to be of the same shape"
+    start_steps = int(num_steps*interpolation_length)
+    inter_steps = int(num_steps*((1-interpolation_length)/2))
+    end_steps = num_steps - start_steps - inter_steps
+    interpolation = np.zeros([inter_steps]+list(arr1.shape))
+    arr_diff = arr2 - arr1
+    for i in range(inter_steps):
+        interpolation[i] = arr1 + (i/(inter_steps-1))*arr_diff
+    start_arrays = np.concatenate([np.expand_dims(arr1, 0)] * start_steps)
+    end_arrays = np.concatenate([np.expand_dims(arr2, 0)] * end_steps)
+    final_array = np.concatenate((start_arrays, interpolation, end_arrays))
+    return final_array

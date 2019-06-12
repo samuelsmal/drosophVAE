@@ -478,6 +478,21 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
 
 # <codecell>
 
+import pickle
+def dump_results(results, config_desc):
+    misc.create_parents(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl")
+    with open(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl", 'wb') as f:
+        pickle.dump(results, f)
+
+# <codecell>
+
+from som_vae.losses import purity as P
+
+# <codecell>
+
+from som_vae.losses.normalized_mutual_information import normalized_mutual_information
+from som_vae.losses.purity import purity
+
 def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=run_cfg):
     xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
     fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
@@ -498,7 +513,7 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
     plt.subplots_adjust(top=0.94)
     plt.savefig(f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png")
 
-def eval_model(training_results, X, X_eval, run_config):
+def eval_model(training_results, X, X_eval, y, run_config):
     model = training_results['model']
     #train_reports = training_results['train_report']
     #test_reports= training_results['test_report']
@@ -515,8 +530,11 @@ def eval_model(training_results, X, X_eval, run_config):
 
     cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
     plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs=len(training_results['train_reports']))
+                
+    nmi = normalised_mutual_information(cluster_assignments, y)
+    pur = P.purity(cluster_assignments, y)
 
-    return cluster_assignments
+    return (cluster_assignments, nmi, pur)
 
 # <codecell>
 
@@ -537,65 +555,64 @@ X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 from itertools import product
 
-grid_search_params = {
-    'model_impl': [config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV, config.ModelType.PADD_CONV],
-    'latent_dim': [2, 8, 16]
-}
+#grid_search_params = {
+#    'model_impl': [config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV, config.ModelType.PADD_CONV],
+#    'latent_dim': [2, 8, 16]
+#}
+#
+#def grid_search(grid_search_params, eval_steps=2, epochs=5):
+#    parameters = product(*grid_search_params.values())
+#
+#    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
+#
+#    for p, cfg in cfgs:
+#        # this allows continuous training with a fixed number of epochs. uuuh yeah.
+#        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+#        vae_training_results = {}
+#        cluster_assignments = []
+#        for u in range(np.int(epochs / eval_steps)):
+#            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+#                                                      train_dataset=X_train_dataset, 
+#                                                      test_dataset=X_test_dataset,
+#                                                      early_stopping=False,
+#                                                      n_epochs=eval_steps)
+#
+#            cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
+#        
+#        cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
+#        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], cluster_assignments
 
-def grid_search(grid_search_params, eval_steps=2, epochs=5):
-    parameters = product(*grid_search_params.values())
+# <codecell>
 
-    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
+epochs = 4
+eval_steps = 2
+vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+vae_training_results = {}
+cluster_assignments = []
+for u in range(np.int(epochs / eval_steps)):
+    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                              train_dataset=X_train_dataset, 
+                                              test_dataset=X_test_dataset,
+                                              early_stopping=False,
+                                              n_epochs=eval_steps)
 
-    for p, cfg in cfgs:
-        # this allows continuous training with a fixed number of epochs. uuuh yeah.
-        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
-        vae_training_results = {}
-        cluster_assignments = []
-        for u in range(np.int(epochs / eval_steps)):
-            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                                      train_dataset=X_train_dataset, 
-                                                      test_dataset=X_test_dataset,
-                                                      early_stopping=False,
-                                                      n_epochs=eval_steps)
+    cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
 
-            cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
-        
-        cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
-        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], cluster_assignments
+cluster_assignments += [eval_model(vae_training_results, X, X_eval, run_cfg)]
 
 # <codecell>
 
 grid_search_results = list(grid_search(grid_search_params))
 
-# <codecell>
-
-stop
+dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
-import pickle
+_t = (vae_training_results['train_reports'], vae_training_results['test_reports'])
 
 # <codecell>
 
 vae_training_results
-
-# <codecell>
-
-_t = vae_training_results
-_t['model'] = None
-
-# <codecell>
-
-_t.keys()
-
-# <codecell>
-
-time
-
-# <codecell>
-
-pickle.dump(_t, f"{SetupConfig.value('grid_search_root_path')}/")
 
 # <codecell>
 
