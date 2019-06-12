@@ -1,3 +1,5 @@
+import numpy as np
+from PIL import Image
 import tensorflow as tf
 
 tfc = tf.contrib
@@ -36,6 +38,9 @@ def tf_write_scalars(writer, scalars, step):
         for n, v in scalars:
             tfc.summary.scalar(n, v, step=step)
 
+def tf_write_image(writer, name, path, step):
+    with writer.as_default(), tfc.summary.always_record_summaries():
+        tfc.summary.scalar(name, np.array(Image.open(path)), step=step)
 
 def to_tf_data(X, y=None, batch_size=None):
     if y is None:

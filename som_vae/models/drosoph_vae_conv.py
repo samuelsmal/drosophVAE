@@ -3,7 +3,9 @@ import tensorflow as tf
 import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 
+from som_vae.layers.padded_conv1d_transposed import PaddedConv1dTransposed
 from som_vae.models.drosoph_vae import DrosophVAE
+from som_vae.models.utils import make_inference_net
 
 class DrosophVAEConv(DrosophVAE):
     """
@@ -44,7 +46,7 @@ class DrosophVAEConv(DrosophVAE):
         self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
 
         # TODO add MaxPooling
-        self.inference_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
+        self.inference_net =make_inference_net(tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
                                                   *[self._convolutional_layer_(idx=i,
                                                                                filters=fs,
                                                                                kernel_size=2,
@@ -54,7 +56,7 @@ class DrosophVAEConv(DrosophVAE):
                                                     for i, fs in enumerate(self._layer_sizes_inference)],
                                                   tfkl.Flatten(),
                                                   tfkl.Dense(2 * self.latent_dim)],
-                                                 name='inference_net')
+                                                 name='inference_net'), input_shape)
         # This does not work...
         #self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(latent_dim,)),
         #                                           tfkl.Lambda(lambda x: tf.reshape(x, [batch_size, 1, latent_dim]), name='gen_reshaping'),

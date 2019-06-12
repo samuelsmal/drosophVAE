@@ -58,8 +58,10 @@ def load_labelled_data(run_config, setup_config):
 
     if run_config['use_single_fly']:
         # I called him Hubert.
-        generator = generator.filter(lambda x: experiment_key(obj=x) ==
-                                     experiment_key(**SetupConfig.value('hubert')))
+        hubert = SetupConfig.value('hubert')
+        generator = generator.filter(lambda x: x.study_id == hubert['study_id'] and x.fly_id == hubert['fly_id'])
+        #generator = generator.filter(lambda x: experiment_key(obj=x) ==
+        #                             experiment_key(**SetupConfig.value('hubert')))
 
     generator = generator.map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)]))
 

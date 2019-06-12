@@ -1,3 +1,5 @@
+import numpy as np
+
 def normalized_mutual_information(cluster_assignments, class_assignments):
     """Computes the Normalized Mutual Information between cluster and class assignments.
     Compare to https://nlp.stanford.edu/IR-book/html/htmledition/evaluation-of-clustering-1.html

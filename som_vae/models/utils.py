@@ -3,7 +3,7 @@ import tensorflow.keras as tfk
 import tensorflow.keras.layers as tfkl
 
 
-def make_inference_net(model_to_wrap, input_shape, batch_size, activation=tf.nn.softplus):
+def make_inference_net(model_to_wrap, input_shape, batch_size=None, activation=tf.nn.softplus):
     """This is basically a wrapper function. Define your model up to the split into μ and σ.
     Which is what this function will do.
 
@@ -14,7 +14,7 @@ def make_inference_net(model_to_wrap, input_shape, batch_size, activation=tf.nn.
     if you think it should be the deviation, then provide `None`.
     """
 
-    x = tfk.Input(shape=input_shape, batch_size=batch_size)
+    x = tfk.Input(shape=input_shape)
     enc = model_to_wrap(x)
     mean, var = tf.split(enc, num_or_size_splits=2, axis=-1)
 
