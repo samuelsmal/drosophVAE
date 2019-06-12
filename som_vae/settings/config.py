@@ -197,7 +197,7 @@ class RunConfig(BaseConfig):
         if self['debug']:
             descr_str += '_' + ''.join([k for k, v in self.items() if k.startswith('d_') and v])
         else:
-            descr_str += '_' + ('all_data' if self['use_all_experiments'] else 'small')
+            descr_str += '_' + ('single_fly' if self['use_single_fly'] else 'labelled')
 
         return descr_str
 
