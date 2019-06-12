@@ -431,6 +431,53 @@ def _reshape_and_rescale_(X, scaler=scaler, data_type=run_cfg['data_type']):
 
 # <codecell>
 
+from hdbscan import HDBSCAN
+from collections import namedtuple
+from sklearn.manifold import TSNE
+
+LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
+
+# <codecell>
+
+def get_latent_space(model, X):
+    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
+    else:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
+
+from matplotlib import gridspec
+
+def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs):
+    cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+    labels = np.array([ls.label.name for frame_id, ls in y[back_to_single_time]])
+    fig = plt.figure(figsize=(20, 18))
+    gs = gridspec.GridSpec(3, 2, figure=fig)
+    ax1 = plt.subplot(gs[:2, :])
+    ax2 = plt.subplot(gs[-1:, :1])
+    ax3 = plt.subplot(gs[-1:, 1:])
+
+    #plt.figure(figsize=(20, 12))
+    #fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
+    for cluster in np.unique(cluster_assignments):
+        c_idx = cluster_assignments == cluster
+        sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
+                        X_latent_mean_tsne_proj[c_idx, 1], 
+                        label=cluster, 
+                        ax=ax1,
+                        color=cluster_colors[cluster], 
+                        style=labels[c_idx],
+                        legend=False)
+        sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2, legend=False)
+        sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3, legend=False)
+
+    ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
+    ax2.set_title('mean')
+    ax3.set_title('var')
+    
+    plt.savefig(f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_latent_space_tsne.png")
+
+# <codecell>
+
 def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=run_cfg):
     xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
     fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
@@ -462,52 +509,14 @@ def eval_model(training_results, X, X_eval, run_config):
     X_hat_eval = _reshape_and_rescale_(model(X, apply_sigmoid=False).numpy()[back_to_single_time])
     
     plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, len(training_results['train_reports']))
+                
+    X_latent = get_latent_space(training_results['model'], X)
+    X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
-# <codecell>
+    cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+    plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs=len(training_results['train_reports']))
 
-from hdbscan import HDBSCAN
-from collections import namedtuple
-from sklearn.manifold import TSNE
-
-LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
-
-# <codecell>
-
-def get_latent_space(model, X):
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
-    else:
-        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
-
-from matplotlib import gridspec
-
-def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_config, epochs):
-    labels = np.array([ls.label.name for frame_id, ls in y[back_to_single_time]])
-    fig = plt.figure(figsize=(20, 18))
-    gs = gridspec.GridSpec(3, 2, figure=fig)
-    ax1 = plt.subplot(gs[:2, :])
-    ax2 = plt.subplot(gs[-1:, :1])
-    ax3 = plt.subplot(gs[-1:, 1:])
-
-    #plt.figure(figsize=(20, 12))
-    #fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
-    for cluster in np.unique(cluster_assignments):
-        c_idx = cluster_assignments == cluster
-        sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
-                        X_latent_mean_tsne_proj[c_idx, 1], 
-                        label=cluster, 
-                        ax=ax1,
-                        color=cluster_colors[cluster], 
-                        style=labels[c_idx],
-                        legend=False)
-        sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2, legend=False)
-        sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3, legend=False)
-
-    ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
-    ax2.set_title('mean')
-    ax3.set_title('var')
-    
-    plt.savefig(f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_latent_space_tsne.png")
+    return cluster_assignments
 
 # <codecell>
 
@@ -526,28 +535,67 @@ X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 # <codecell>
 
-vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-vae_training_results = {}
+from itertools import product
+
+grid_search_params = {
+    'model_impl': [config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV, config.ModelType.PADD_CONV],
+    'latent_dim': [2, 8, 16]
+}
+
+def grid_search(grid_search_params, eval_steps=2, epochs=5):
+    parameters = product(*grid_search_params.values())
+
+    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
+
+    for p, cfg in cfgs:
+        # this allows continuous training with a fixed number of epochs. uuuh yeah.
+        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+        vae_training_results = {}
+        cluster_assignments = []
+        for u in range(np.int(epochs / eval_steps)):
+            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                      train_dataset=X_train_dataset, 
+                                                      test_dataset=X_test_dataset,
+                                                      early_stopping=False,
+                                                      n_epochs=eval_steps)
+
+            cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
+        
+        cluster_assignments += [eval_model(vae_training_results, X, X_eval, cfg)]
+        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], cluster_assignments
 
 # <codecell>
 
-# this allows continuous training with a fixed number of epochs. uuuh yeah.
-for _ in range(8):
-    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                              train_dataset=X_train_dataset, 
-                                              test_dataset=X_test_dataset,
-                                              early_stopping=False,
-                                              n_epochs=25)
+grid_search_results = list(grid_search(grid_search_params))
 
-    eval_model(vae_training_results, X, X_eval, run_cfg)
-    
-    X_latent = get_latent_space(vae_training_results['model'], X)
-    X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
+# <codecell>
 
-    cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
-    cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+stop
 
-    plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_cfg, epochs=len(vae_training_results['train_reports']))
+# <codecell>
+
+import pickle
+
+# <codecell>
+
+vae_training_results
+
+# <codecell>
+
+_t = vae_training_results
+_t['model'] = None
+
+# <codecell>
+
+_t.keys()
+
+# <codecell>
+
+time
+
+# <codecell>
+
+pickle.dump(_t, f"{SetupConfig.value('grid_search_root_path')}/")
 
 # <codecell>
 

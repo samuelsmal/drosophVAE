@@ -1,3 +1,5 @@
+"""Look at this as a functional interface. The others have the same functions.
+"""
 import time
 import warnings
 import numpy as np

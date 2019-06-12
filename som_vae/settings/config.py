@@ -93,6 +93,7 @@ class SetupConfig(BaseConfig):
         self['experiment_root_path'] = experiment_root_path
         self['video_root_path'] = f"{data_root_path}/videos"
         self['figures_root_path'] = f"{data_root_path}/figures"
+        self['grid_search_root_path'] = f"{data_root_path}/grid_search"
 
         self['experiment_path_template'] = '{base_path}/{study_id}/{fly_id}/{experiment_id}'
         # to be filled with `experiment_path_template` as `base_experiment_path`
