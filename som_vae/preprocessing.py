@@ -130,7 +130,7 @@ def frame_label_pair_to_int(frame_labels):
     return [ls.label.value for ls in frame_labels[:, -1, 1]]
 
 
-def preprocess_3d_angle_data(frame_data, frame_labels, low_variance_cutoff=0., blacklist_behavior=None, normalize_features=True):
+def preprocess_3d_angle_data(frame_data, frame_labels, low_variance_cutoff=0., blacklist_behavior=None, normalize_features=False):
     """ Full preprocessing pipeline for 3d angle data
     """
     frame_data = _convert_3d_to_angle_(frame_data)

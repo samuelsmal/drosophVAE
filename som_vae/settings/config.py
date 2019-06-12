@@ -138,7 +138,7 @@ class RunConfig(BaseConfig):
             'preprocessing': {
                 'low_variance_cutoff': 0.,
                 'blacklist_behavior': [Behavior.REST, Behavior.NONE],
-                'normalize_features': True
+                'normalize_features': False
             }
         },
         'pos_2d_params': {
