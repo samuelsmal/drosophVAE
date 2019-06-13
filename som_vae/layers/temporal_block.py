@@ -1,6 +1,6 @@
 import tensorflow as tf
 import tensorflow.keras as tfk
-import tensorflow.keras.layers as tfk
+import tensorflow.keras.layers as tfkl
 
 class TemporalBlock(tfkl.Layer):
     def __init__(self, filter_size, kernel_size, dilation_rate, dropout=0.2, trainable=True, name=None, dtype=None, activity_regularizer=None, **kwargs):

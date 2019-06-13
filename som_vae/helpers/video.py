@@ -9,8 +9,10 @@ import imageio
 import colorsys
 import seaborn as sns
 
+from PIL import Image
 from som_vae.helpers.misc import flatten
 from som_vae.settings import config, skeleton, data
+from som_vae.settings.config import SetupConfig
 
 
 __FRAME_ACTIVE_COLOUR__ = (255, 0, 0)
@@ -380,7 +382,7 @@ def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to
     frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
                        experiment[0], experiment_path=experiment[1])
               for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(
-                  cluster_assignment_idx, 
+                  cluster_assignment_idx,
                   cluster_assignments[cluster_assignment_idx],
                   np.array(images_paths_for_experiments)[cluster_assignment_idx]))
               if pathlib.Path(experiment[1]).is_file())
@@ -392,4 +394,67 @@ def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to
         _save_frames_(output_path, frames, format='mp4')
 
         return output_path
+
+# new video helpers
+
+def _path_for_image_(image_id, label):
+    base_path = SetupConfig.value('experiment_root_path')
+    exp_path = SetupConfig.value('experiment_path_template').format(base_path=base_path,
+                                                         study_id=label.study_id,
+                                                         fly_id=label.fly_id,
+                                                         experiment_id=label.experiment_id)
+    return SetupConfig.value('fly_image_template').format(base_experiment_path=exp_path, image_id=image_id)
+
+def resize_image(img, new_width=200):
+    wpercent = (new_width / float(img.size[0]))
+    hsize = int((float(img.size[1]) * float(wpercent)))
+    return img.resize((new_width, hsize), Image.ANTIALIAS)
+
+def pad_with_last(list_of_lists):
+    max_len = max([len(i) for i in list_of_lists])
+
+    def _pad_with_last_(ls, to_len):
+        diff_len = to_len - len(ls)
+        return ls + [ls[-1]] * diff_len
+
+    return [_pad_with_last_(ls, max_len) for ls in list_of_lists]
+
+def group_video_of_cluster(cluster_id, paths, run_config, n_sequences_to_draw=9):
+    images = pad_with_last([[resize_image(Image.open(p)) for p in ax1] for ax1 in paths])
+    #images = [[resize_image(Image.open(p)) for p in ax1] for ax1 in paths[:n_sequences_to_draw]]
+
+    img = images[0][0]
+
+    element_width, element_height = img.size
+    n_elements_x_dim = np.int(np.sqrt(n_sequences_to_draw))
+    n_elements_y_dim = np.int(np.sqrt(n_sequences_to_draw))
+
+    combined_images = [Image.new('RGB', (3 * element_width, 3 * element_height)) for _ in range(len(images[0]))]
+
+    for sequence_id, sequence in enumerate(images):
+        x_offset = (sequence_id % n_elements_x_dim) * element_width
+        y_offset = (sequence_id // n_elements_x_dim) * element_height
+
+        for frame_number, image in enumerate(sequence):
+            combined_images[frame_number].paste(image, (x_offset, y_offset))
+
+    #return combined_images, images
+
+    file_path = f"{SetupConfig.value('video_root_path')}/group_of_cluster-{cluster_id}-{run_config.description()}.mp4"
+    _save_frames_(file_path, combined_images)
+    return file_path
+
+def group_video_of_clusters(cluster_assignments, frames_with_labels, run_config,
+                            n_sequences_to_draw=9, n_clusters_to_draw=10):
+    grouped = group_by_cluster(cluster_assignments)
+
+    sorted_groups = sorted([(g, sorted(vals, key=len, reverse=True)) for g, vals in grouped.items()],
+                           key=lambda x: max(map(len, x[1])),
+                           reverse=True)
+
+    for cluster_id, sequences in sorted_groups[:n_clusters_to_draw]:
+        sequences[:n_sequences_to_draw]
+        paths = [[_path_for_image_(image_id, label) for image_id, label in frames_with_labels[seq]] for seq in sequences]
+        #return paths
+        yield cluster_id, group_video_of_cluster(cluster_id, paths, run_config, n_sequences_to_draw=n_sequences_to_draw)
 

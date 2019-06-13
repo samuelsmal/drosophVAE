@@ -118,7 +118,7 @@ class RunConfig(BaseConfig):
         'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input.
                                        # allowing the model to learn the identity function.
         'use_single_fly': True,
-        'data_type': DataType.ANGLE_3D,
+        'data_type': DataType.POS_2D,
         'use_time_series': True,       # triggers time series application, without this the model is only dense layers
         'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
         'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None,
@@ -177,8 +177,14 @@ class RunConfig(BaseConfig):
         def _bool_(v):
             return 'T' if self[v] else 'F'
 
+        def _combine_(a, b):
+            if a == '':
+                return b
+            else:
+                return f"{a}-{b}"
+
         valus_of_interest = [
-            ('model_impl', 'mi', self.get('model_impl').name),
+            ('model_impl', '', self.get('model_impl').name),
             ('data', '', self['data_type'].name),
             ('time', 't', self['time_series_length'] if self['use_time_series'] else 'F'),
             ('latent_dim', 'ld', self['latent_dim']),
@@ -195,7 +201,7 @@ class RunConfig(BaseConfig):
         valus_of_interest = valus_of_interest[:verbosity]
 
         descr_idx = 1 if short else 0
-        descr_str = '-'.join((f"{v[descr_idx]}-{v[2]}" for v in valus_of_interest))
+        descr_str = '-'.join((_combine_(v[descr_idx], v[2]) for v in valus_of_interest))
 
 
         if self['debug']:

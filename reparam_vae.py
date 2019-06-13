@@ -528,7 +528,7 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
     plt.savefig(figure_path)
     return figure_path
 
-def eval_model(training_results, X, X_eval, y, run_config):
+def eval_model(training_results, X, X_eval, y, y_frames, run_config):
     model = training_results['model']
     #train_reports = training_results['train_report']
     #test_reports= training_results['test_report']
@@ -546,12 +546,15 @@ def eval_model(training_results, X, X_eval, y, run_config):
     cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
     plot_latent_path = plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs=len(training_results['train_reports']))
                 
+    group_videos = list(video.group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_config))
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
 
     return {'latent_projection': X_latent_mean_tsne_proj, 
             'cluster_assignments': cluster_assignments,
-            'plot_paths': {'reconstruction': plot_recon_path, 'latent': plot_latent_path}}
+            'plot_paths': {'reconstruction': plot_recon_path, 'latent': plot_latent_path},
+            'video_paths': {'groups': group_videos},
+           }
 
 # <codecell>
 
@@ -576,10 +579,6 @@ reload(vae_training)
 # <codecell>
 
 vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-
-# <codecell>
-
-
 
 # <codecell>
 
@@ -609,36 +608,37 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150):
                                                           early_stopping=False,
                                                           n_epochs=eval_steps)
 
-                eval_results += [eval_model(vae_training_results, X, X_eval, y, cfg)]
+                eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
             except Exception as e:
                 print(f"problem with {vae_training_args}: {e}")
             #for n, p in eval_results[-1]['plot_paths'].items():
             #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
         
-        eval_results += [eval_model(vae_training_results, X, X_eval, y, cfg)]
+        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
         yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], eval_results
 
 # <codecell>
 
-grid_search_params = {
-    'model_impl': [config.ModelType.PADD_CONV, config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV],
-    'latent_dim': [12, 16]
-}
-
-grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=4))
-
-dump_results(grid_search_results, 'grid_search_only_vae')
-
-# <codecell>
-
-grid_search_results
+#grid_search_params = {
+#    'model_impl': [config.ModelType.PADD_CONV, config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV],
+#    'latent_dim': [12, 16]
+#}
+#
+#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=4))
+#
+#dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
-plt.ioff()
+#grid_search_results
+
+# <codecell>
+
 reload(vae_training)
+reload(video)
 epochs = 4
 eval_steps = 2
+run_cfg['latent_dim'] = 6
 vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
 vae_training_results = {}
 eval_results = []
@@ -649,11 +649,9 @@ for u in range(np.int(epochs / eval_steps)):
                                               early_stopping=False,
                                               n_epochs=eval_steps)
 
-    eval_results += [eval_model(vae_training_results, X, X_eval, y, run_cfg)]
+    eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
-eval_results += [eval_model(vae_training_results, X, X_eval, y, run_cfg)]
-
-plt.ion()
+eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
 # <codecell>
 
@@ -786,85 +784,39 @@ plt.ion()
 
 # <codecell>
 
-grikkk
+#cluster_assignments = eval_results[-1]['cluster_assignments']
+#
+#group_videos = list(video.group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_cfg))
 
 # <codecell>
 
-cluster_assignments = eval_results[-1]['cluster_assignments']
+display_video(eval_results[1]['video_paths']['groups'][0])
 
 # <codecell>
 
-# new video helpers
-import cv2
-from PIL import Image
-
-def _path_for_image_(image_id, label):
-    base_path = SetupConfig.value('experiment_root_path')
-    exp_path = SetupConfig.value('experiment_path_template').format(base_path=base_path, 
-                                                         study_id=label.study_id,
-                                                         fly_id=label.fly_id,
-                                                         experiment_id=label.experiment_id)
-    return SetupConfig.value('fly_image_template').format(base_experiment_path=exp_path, image_id=image_id)
-
-def resize_image(img, new_width=200):
-    wpercent = (new_width / float(img.size[0]))
-    hsize = int((float(img.size[1]) * float(wpercent)))
-    return img.resize((new_width, hsize), Image.ANTIALIAS)
-
-def pad_with_last(list_of_lists):
-    max_len = max([len(i) for i in list_of_lists])
-    
-    def _pad_with_last_(ls, to_len): 
-        diff_len = to_len - len(ls)
-        return ls + [ls[-1]] * diff_len
-    
-    return [_pad_with_last_(ls, max_len) for ls in list_of_lists]
-
-def group_video_of_cluster(cluster_id, paths, run_config, n_sequences_to_draw=9):
-    images = pad_with_last([[resize_image(Image.open(p)) for p in ax1] for ax1 in paths])
-    #images = [[resize_image(Image.open(p)) for p in ax1] for ax1 in paths[:n_sequences_to_draw]]
-
-    img = images[0][0]
-
-    element_width, element_height = img.size
-    n_elements_x_dim = np.int(np.sqrt(n_sequences_to_draw))
-    n_elements_y_dim = np.int(np.sqrt(n_sequences_to_draw))
-    
-    combined_images = [Image.new('RGB', (3 * element_width, 3 * element_height)) for _ in range(len(images[0]))]
-
-    for sequence_id, sequence in enumerate(images):
-        x_offset = (sequence_id % n_elements_x_dim) * element_width
-        y_offset = (sequence_id // n_elements_x_dim) * element_height
-        
-        for frame_number, image in enumerate(sequence):
-            combined_images[frame_number].paste(image, (x_offset, y_offset))
-            
-    #return combined_images, images
-            
-    file_path = f"{SetupConfig.value('video_root_path')}/group_of_cluster-{cluster_id}-{run_config.description()}.mp4"
-    video._save_frames_(file_path, combined_images)
-    return file_path 
-            
-def group_video_of_clusters(cluster_assignments, frames_with_labels, run_config, n_sequences_to_draw=9):
-    grouped = video.group_by_cluster(cluster_assignments)
-
-    sorted_groups = sorted([(g, sorted(vals, key=len, reverse=True)) for g, vals in grouped.items()], 
-                           key=lambda x: max(map(len, x[1])), 
-                           reverse=True)
-                           
-    for cluster_id, sequences in sorted_groups:
-        sequences[:n_sequences_to_draw]
-        paths = [[_path_for_image_(image_id, label) for image_id, label in frames_with_labels[seq]] for seq in sequences]
-        #return paths
-        yield group_video_of_cluster(cluster_id, paths, run_config, n_sequences_to_draw=n_sequences_to_draw)
+reload(video)
 
 # <codecell>
 
-group_videos = list(group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_cfg))
+X_train.shape
 
 # <codecell>
 
-display_video(group_videos[0])
+X.shape
+
+# <codecell>
+
+frame_labels
+
+# <codecell>
+
+len(group_videos)
+
+# <codecell>
+
+#idx = 0
+idx += 1
+display_video(group_videos[idx][1])
 
 # <codecell>
 

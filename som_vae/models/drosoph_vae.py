@@ -7,6 +7,7 @@ import tensorflow.keras.layers as tfkl
 
 from som_vae.helpers.misc import if_last
 from som_vae.models.utils import make_inference_net
+from som_vae.layers.temporal_block import TemporalBlock
 
 # DrosophVAE base class
 # build using:
