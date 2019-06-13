@@ -455,7 +455,7 @@ X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 from itertools import product
 
-def grid_search(grid_search_params, eval_steps=25, epochs=150):
+def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_steps=1, supervised_epochs=5):
     parameters = product(*grid_search_params.values())
     cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
 
@@ -481,12 +481,45 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150):
             #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
         
         eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
-        yield p, vae_training_results['train_reports'], vae_training_results['test_reports'], eval_results
+        
+        #
+        # Unsupervised part
+        # 
+        
+        base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], 
+                                                           input_shape=X_train.shape[1:],
+                                                           batch_size=run_cfg['batch_size'])
+        base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+        supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=run_cfg)
+        supervised_training_results = {}
+        supervised_eval_results = []
+
+        for u in range(np.int(epochs / eval_steps)):
+            supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                                      train_dataset=train_dataset, 
+                                                      test_dataset=test_dataset,
+                                                      early_stopping=False,
+                                                      n_epochs=eval_steps)
+
+        base_mdl.inference_net = supervised_training_results['model']
+        supervised_training_results['model'] = base_mdl 
+
+        eval_model(supervised_training_results, X, X_eval, y, y_frames, run_config)
+        
+        yield p, 
+        vae_training_results['train_reports'], 
+        vae_training_results['test_reports'],
+        vae_training_args['model_checkpoints_path'],
+        eval_results,
+        supervised_training_results['train_reports'],
+        supervised_training_results['test_reports'],
+        supervised_training_args['model_checkpoints_path']
 
 # <codecell>
 
 grid_search_params = {
-    'data_type': config.DataType.POS_2D, # config.DataType.values(),
+    'data_type': [config.DataType.POS_2D], # config.DataType.values(),
     'model_impl': config.ModelType.values(),
     'latent_dim': [12, 16]
 }
@@ -497,8 +530,8 @@ if SetupConfig.runs_on_lab_server():
 
 # <codecell>
 
-#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
-#dump_results(grid_search_results, 'grid_search_only_vae')
+grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
+dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
@@ -532,25 +565,12 @@ from som_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv
 
 # <codecell>
 
-# dummy modelM
-#model_loaded = DrosophVAESkipConv(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
-#model_loaded.load_weights(vae_training_args['model_checkpoints_path'])
-
-# <codecell>
-
-#from tensorflow.python.eager import context
-#context.context()._clear_caches()  # Increasing memory and PyObject count without this
-#import gc
-#gc.collect()
-#print(len(gc.get_objects()))
-
-# <codecell>
+base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
+base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
 reload(supervised_training)
 
-# <codecell>
-
-supervised_training_args = supervised_training.init(model=vae_training_results['model'].inference_net, run_config=run_cfg)
+supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=run_cfg)
 supervised_training_results = {}
 supervised_eval_results = []
 
@@ -560,6 +580,11 @@ for u in range(np.int(epochs / eval_steps)):
                                               test_dataset=test_dataset,
                                               early_stopping=False,
                                               n_epochs=eval_steps)
+
+base_mdl.inference_net = supervised_training_results['model']
+supervised_training_results['model'] = base_mdl 
+
+eval_model(supervised_training_results, X, X_eval, y, y_frames, run_config)
 
 # <codecell>
 

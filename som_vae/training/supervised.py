@@ -45,9 +45,9 @@ def init(model, run_config, reset_graph=False):
 
 def compute_gradients(model, x, y):
     with tf.GradientTape() as tape:
-        #mean, var = model(x)
-        #encoded = tf.nn.l2_normalize(((mean, var)))
-        loss = compute_loss_labels(tf.concat(model(x), axis=1), y)
+        mean, var = model(x)
+        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=1))
+        loss = compute_loss_labels(encoded, y[:,-1])
         return tape.gradient(loss, model.trainable_variables), loss
 
 
@@ -57,10 +57,12 @@ def compute_loss_for_data(model, data):
         #mean, var = model(batch_x)
         #encoded = tf.nn.l2_normalize(((mean, var)))
         #loss_b = compute_loss_labels(mean, batch_y)
-        loss_b = compute_loss_labels(tf.concat(model(x), axis=1), y)
+        mean, var = model(x)
+        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=1))
+        loss_b = compute_loss_labels(encoded, y[:,-1])
         #loss_b = compute_loss_labels(model, batch_x, batch_y)
         loss(loss_b)
 
-    return loss.result()
+    return (loss.result(), )
 
 train = partial(_train_, gradient_fn=compute_gradients, loss_report_fn=compute_loss_for_data)

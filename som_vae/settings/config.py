@@ -131,7 +131,9 @@ class RunConfig(BaseConfig):
         'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None,
                                        # it will be automatically computed.
         'latent_dim': None,               # should be adapted given the input dim
-        'batch_size': 128,
+        'batch_size': 128,             # if you plan on using the supervised parts as well keep this
+                                       # small. it will create a batch_size^3 dim tensor to compute
+                                       # the loss
         'loss_weight_reconstruction': 1.0,
         'loss_weight_kl': 0.0,             # if zero it will not even be computed
         'dropout_rate': 0.,
@@ -159,7 +161,7 @@ class RunConfig(BaseConfig):
         super(BaseConfig, self).__init__({**RunConfig.DEFAULT_VALUES, **kwargs})
 
         if self['use_single_fly']:
-            self['batch_size'] = 1024
+            self['batch_size'] = 128
             self['train_test_ratio'] = 0.9
 
         if not(self['data_type'] in DataType):
