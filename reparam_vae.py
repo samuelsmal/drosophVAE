@@ -363,14 +363,17 @@ def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs
         axs[2*leg][0].set_ylabel(f"input\n{plots._get_leg_name_(leg)}")
         axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{plots._get_leg_name_(leg)}")
 
-        axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
-        axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
+        #axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
+        #axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
         
-        _equalize_ylim(axs[2 * leg][dim], axs[2 * leg + 1][dim])
+        _equalize_ylim(axs[2 * leg][0], axs[2 * leg + 1][0])
+        _equalize_ylim(axs[2 * leg][1], axs[2 * leg + 1][1])
         
         #axs[2*leg][1].set_yticks([])
         #axs[2*leg + 1][1].set_yticks([])
         
+    axs[0][0].legend([tp.name for tp in skeleton.tracked_points[:5]], loc='upper left')
+    
     axs[-1][0].set_xlabel('time [min]')
     axs[-1][1].set_xlabel('time [min]')
 
@@ -702,40 +705,6 @@ stop
 #cluster_assignments = eval_results[-1]['cluster_assignments']
 #
 #group_videos = list(video.group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_cfg))
-
-# <codecell>
-
-display_video(eval_results[-1]['video_paths']['groups'][0][1])
-
-# <codecell>
-
-
-
-# <codecell>
-
-reload(video)
-
-# <codecell>
-
-X_train.shape
-
-# <codecell>
-
-X.shape
-
-# <codecell>
-
-frame_labels
-
-# <codecell>
-
-len(group_videos)
-
-# <codecell>
-
-#idx = 0
-idx += 1
-display_video(group_videos[idx][1])
 
 # <codecell>
 
