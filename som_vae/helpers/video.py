@@ -405,7 +405,7 @@ def _path_for_image_(image_id, label):
                                                          experiment_id=label.experiment_id)
     return SetupConfig.value('fly_image_template').format(base_experiment_path=exp_path, image_id=image_id)
 
-def resize_image(img, new_width=200):
+def resize_image(img, new_width=304):
     wpercent = (new_width / float(img.size[0]))
     hsize = int((float(img.size[1]) * float(wpercent)))
     return img.resize((new_width, hsize), Image.ANTIALIAS)

@@ -790,7 +790,11 @@ eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cf
 
 # <codecell>
 
-display_video(eval_results[1]['video_paths']['groups'][0])
+display_video(eval_results[-1]['video_paths']['groups'][0][1])
+
+# <codecell>
+
+
 
 # <codecell>
 
