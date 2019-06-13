@@ -17,11 +17,6 @@
 
 # <codecell>
 
-#%env CUDA_DEVICE_ORDER=PCI_BUS_ID
-#%env CUDA_VISIBLE_DEVICES=1
-
-# <codecell>
-
 import json
 from collections import namedtuple
 from functools import partial
