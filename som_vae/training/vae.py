@@ -53,8 +53,8 @@ def init(input_shape, run_config, reset_graph=True):
     else:
         raise ValueError(f"no such model: {run_config['model_impl']}")
 
-    model.inference_net.summary(line_length=100)
-    model.generative_net.summary(line_length=100)
+    #model.inference_net.summary(line_length=100)
+    #model.generative_net.summary(line_length=100)
 
     if run_config['optimizer'] == 'Adam':
         optimizer = tf.train.AdamOptimizer(1e-4)

@@ -333,24 +333,46 @@ from som_vae.losses import purity as P
 
 # <codecell>
 
+def _equalize_ylim(ax0, ax1):
+    ymin0, ymax0 = ax0.get_ylim()
+    ymin1, ymax1 = ax1.get_ylim()
+    
+    min_ = min(ymin0, ymin1)
+    max_ = max(ymax0, ymax1)
+    
+    ax0.set_ylim((min_, max_))
+    ax1.set_ylim((min_, max_))
+
+# <codecell>
+
 def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs):
     fig, axs = plt.subplots(3 * 2, real.shape[2], sharex=True, figsize=(25, 10))
+    
+    x_axis_values = np.arange(real.shape[0]) / SetupConfig.value('frames_per_second') / 60.
 
     for dim in range(2):
         for leg in range(3):
             for limb in range(5):
-                axs[2 * leg][dim].plot(real[:, limb + leg * 5, dim])
-                axs[2 * leg + 1][dim].plot(reconstructed[:, limb + leg * 5, dim])
+                axs[2 * leg][dim].plot(x_axis_values, real[:, limb + leg * 5, dim])
+                axs[2 * leg + 1][dim].plot(x_axis_values, reconstructed[:, limb + leg * 5, dim])
+                
+    axs[0][0].set_title('x')
+    axs[0][1].set_title('y')
 
     for leg in range(3):
-        axs[2*leg][0].set_ylabel('input')
-        axs[2*leg + 1][0].set_ylabel('reconstructed')
+        axs[2*leg][0].set_ylabel(f"input\n{plots._get_leg_name_(leg)}")
+        axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{plots._get_leg_name_(leg)}")
 
-        axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg][1])
-        axs[2*leg + 1][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][1])
-
-        axs[2*leg][1].set_yticks([])
-        axs[2*leg + 1][1].set_yticks([])
+        axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
+        axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
+        
+        _equalize_ylim(axs[2 * leg][dim], axs[2 * leg + 1][dim])
+        
+        #axs[2*leg][1].set_yticks([])
+        #axs[2*leg + 1][1].set_yticks([])
+        
+    axs[-1][0].set_xlabel('time [min]')
+    axs[-1][1].set_xlabel('time [min]')
 
     fig.align_ylabels(axs)
     fig.suptitle(f"Comparing input and reconstruction")
@@ -386,6 +408,10 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
 
 # <codecell>
 
+eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
+
+# <codecell>
+
 from som_vae.losses.normalized_mutual_information import normalized_mutual_information
 from som_vae.losses.purity import purity
 
@@ -412,6 +438,7 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
                                                                  epochs=len(training_results['train_reports']), 
                                                                  run_desc=exp_desc_short)
 
+    return
                 
     X_latent = get_latent_space(training_results['model'], X)
     X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
@@ -529,17 +556,14 @@ grid_search_params = {
 }
 
 if SetupConfig.runs_on_lab_server():
+    started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
     grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=100))
-    dump_results(grid_search_results, 'grid_search_only_vae')
+    dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
 
 # <codecell>
 
-run_cfg['model_impl'] == config.ModelType.SKIP_PADD_CONV
-
-# <codecell>
-
-grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=5))
-dump_results(grid_search_results, 'grid_search_only_vae')
+#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=5))
+#dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
@@ -567,31 +591,21 @@ if not SetupConfig.runs_on_lab_server():
 
     eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
+# <codecell>
+
+eval_results
+
+# <codecell>
+
+eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
+
+# <codecell>
+
+stop
+
 # <markdowncell>
 
 # # evaluation
-
-# <codecell>
-
-#_min_nb_batches_for_sample_length_ = int(np.ceil(len(X) / run_cfg['batch_size']))
-#X_gen_eval = np.vstack([model.sample().numpy()  for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time]
-#X_gen_eval = _reshape_and_rescale_(X_gen_eval[:len(X)])
-
-# <codecell>
-
-## losses
-#for a, n in zip(range(train_reports.shape[1]), ['a', 'b', 'c']):
-#    plt.subplot(train_reports.shape[1] + 1, 1, a + 1)
-#    plt.plot(train_reports[:, a], label=f"train_{n}")
-#    plt.plot(test_reports[:, a], label=f"test_{n}")
-#    plt.title(n)
-#    
-#plt.tight_layout()
-#plt.legend()
-
-# <codecell>
-
-#plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
 
 # <codecell>
 

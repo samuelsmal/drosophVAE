@@ -419,7 +419,7 @@ def pad_with_last(list_of_lists):
 
     return [_pad_with_last_(ls, max_len) for ls in list_of_lists]
 
-def group_video_of_cluster(cluster_id, paths, run_config, epochs, n_sequences_to_draw=9,
+def group_video_of_cluster(cluster_id, paths, run_desc, epochs, n_sequences_to_draw=9,
                            pad_videos=False):
     images = [[resize_image(Image.open(p)) for p in ax1] for ax1 in paths[:n_sequences_to_draw]]
 
@@ -444,11 +444,11 @@ def group_video_of_cluster(cluster_id, paths, run_config, epochs, n_sequences_to
     #return combined_images, images
 
     file_path = (f"{SetupConfig.value('video_root_path')}"
-                 f"/group_of_cluster-{cluster_id}-{run_config.description()}-e-{epochs}.mp4")
+                 f"/group_of_cluster-{cluster_id}-{run_desc}-e-{epochs}.mp4")
     _save_frames_(file_path, combined_images)
     return file_path
 
-def group_video_of_clusters(cluster_assignments, frames_with_labels, run_config, epochs,
+def group_video_of_clusters(cluster_assignments, frames_with_labels, run_desc, epochs,
                             n_sequences_to_draw=9, n_clusters_to_draw=10):
     grouped = group_by_cluster(cluster_assignments)
 
@@ -460,5 +460,5 @@ def group_video_of_clusters(cluster_assignments, frames_with_labels, run_config,
         sequences[:n_sequences_to_draw]
         paths = [[_path_for_image_(image_id, label) for image_id, label in frames_with_labels[seq]] for seq in sequences]
         #return paths
-        yield cluster_id, group_video_of_cluster(cluster_id, paths, run_config, epochs=epochs, n_sequences_to_draw=n_sequences_to_draw)
+        yield cluster_id, group_video_of_cluster(cluster_id, paths, run_desc, epochs=epochs, n_sequences_to_draw=n_sequences_to_draw)
 

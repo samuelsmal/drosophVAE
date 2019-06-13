@@ -54,7 +54,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
         # the KL loss can explode easily, this is to prevent overflow errors
         kl = tf.reduce_mean(tf.clip_by_value(tfp.distributions.kl_divergence(p, q, allow_nan_stats=True), 0., 1e32))
     except (_NotOkStatusException, InfOrNanError) as e:
-        print('Error with KL-loss: ', e, tf.reduce_mean(var))
+        print('Error with KL-loss: ', e, ) #tf.reduce_mean(var))
         kl = 1.
 
     if not detailed:

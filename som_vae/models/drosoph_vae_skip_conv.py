@@ -53,9 +53,6 @@ class DrosophVAESkipConv(DrosophVAE):
         # since the layers grow only one time-step per layer:
         self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
 
-        print(self._layer_sizes_inference)
-        print(self._layer_sizes_generative)
-
         # TODO add MaxPooling
         self.inference_net = make_inference_net(tfk.Sequential([*[_convolutional_layer_(idx=i,
                                                                   filters=fs,
