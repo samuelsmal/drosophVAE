@@ -137,6 +137,8 @@ class DrosophVAE(tfk.Model):
         return model.decode(z, apply_sigmoid=True)
 
     def call(self, x, training=False, apply_sigmoid=False):
+        if apply_sigmoid:
+            raise ValueError('no longer supported')
         return self.decode(self.reparameterize(*self.encode(x, training=training)),
                            apply_sigmoid=apply_sigmoid)
 

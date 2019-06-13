@@ -3,9 +3,11 @@
 
 # <codecell>
 
+from som_vae.settings.config import SetupConfig
 # adapt according to your machine (0 should be fine, if you have a GPU)
-#%env CUDA_DEVICE_ORDER=PCI_BUS_ID
-#%env CUDA_VISIBLE_DEVICES=0
+if SetupConfig.runs_on_lab_server():
+    %env CUDA_DEVICE_ORDER=PCI_BUS_ID
+    %env CUDA_VISIBLE_DEVICES=1
 
 # <markdowncell>
 
@@ -78,135 +80,32 @@ jupyter.fix_layout()
 
 # <markdowncell>
 
-# ## Constants (Settings)
-
-# <codecell>
-
-# all those experiments and data will be used
-#from som_vae.settings import config
-#print(f"this is the main experiment, study, and fly id: {config.full_experiment_id()}.\n\nloadable experiments. there is a blacklist below.")
-#!ls $config.__EXPERIMENT_ROOT__
-
-# <codecell>
-
-# if you want to see the flys as well, or just more information
-# !tree -L 2 $config.__EXPERIMENT_ROOT__
-
-# <markdowncell>
-
-# ## Loading of 2d positional data
-
-# <codecell>
-
-#if not run_config['use_all_experiments']:
-#    frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
-#    frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
-
-# <codecell>
-
-# TODO form a wrapper around the used data, experiments (the ids), data, normalisation factor, images, ... a namedtuple should do the trick
-#if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-#    if run_config['use_all_experiments']:
-#        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
-#    else:
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
-#
-#        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
-#                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
-#                                               .to_list()
-#
-#        if len(frames_of_interest) != len(joint_positions):
-#            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-#            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
-#        
-#        joint_positions = joint_positions[frames_of_interest[:len(joint_positions)]]
-#        frames_idx_with_labels = frames_idx_with_labels.iloc[frames_of_interest]
-#        images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
-
-# <markdowncell>
-
-# ## loading of angle-data
+# # Setup, loading of data
 
 # <codecell>
 
 setup_cfg = SetupConfig()
-run_cfg = RunConfig.ANGLE_3D()
+run_cfg = RunConfig()
 
-frame_data, frame_labels = data_loading.load_labelled_data(run_config=run_cfg, setup_config=setup_cfg)
+frame_data, frame_labels, normalisation_factors = data_loading.load_labelled_data(run_config=run_cfg, setup_config=setup_cfg)
 
-# <codecell>
+# <markdowncell>
 
-frame_data, frame_labels, selected_columns, normalisation_factors = preprocessing.preprocess_3d_angle_data(frame_data, frame_labels, **run_cfg.value('angle_3d_params', 'preprocessing'))
-
-# <codecell>
-
-#if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_experiments']:
-#    all_experiments = [e for e in experiments_from_root() if (e.study_id not in _EXPERIMENT_BLACK_LIST_) and (e.key not in _FLY_BLACK_LIST_)]
-#    # `per_experiment` is a shitty parameter name, the data is not normalised and return per experiment.
-#    loading_kwargs = {'dimensions': '3d', 'return_with_experiment_id': True}
-#    angle_data_raw = [(exp_id, SD.convert_3d_to_angle(d)) for exp_id, d in preprocessing.get_data_and_normalization(all_experiments, **loading_kwargs)]
-#
-#    # takes for ever to render, if you want to see this, please run it yourself
-#    #plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
-#
-#    exp_ids, angle_data  = zip(*angle_data_raw)
-#    angle_data = np.vstack(angle_data)
-#    selected_cols = np.where(np.var(angle_data, axis=0) > 0.0)[0]
-#    joint_positions = angle_data[:, selected_cols]
-
-# <codecell>
-
-# will generate a huge plot and take about 6min to run...
-#plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
-
-# <codecell>
-
-#all_experiments = experiments_from_root()
-#print(len(all_experiments))
-#
-#pos_data = preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)
-#
-#norm_pos_data, norm_pos_data_params = zip(*[preprocessing.normalize(p) for p in pos_data])
-#experiment_lengths = [len(p) for p in norm_pos_data] # for applying the right normalization factors
-#norm_pos_data = np.vstack(norm_pos_data)
-#
-#print(f"in total we have {len(all_experiments)} experiments, but only {len(experiment_lengths)} are usable right now")
-#
-#norm_pos_data_embedded = TSNE(n_components=2, random_state=42).fit_transform(norm_pos_data[:, :, :2].reshape(norm_pos_data.shape[0], -1))
-#
-##_cs = sns.color_palette(n_colors=len(seen_labels))
-##
-##fig = plt.figure(figsize=(10, 10))
-##_all_frames_ = pd.concat((training_frames, testing_frames))
-##
-##behaviour_colours = dict(zip(seen_labels, _cs))
-##
-##for l, c in behaviour_colours.items():
-##    _d = X_embedded[_all_frames_['label'] == l]
-##    # c=[c] since matplotlib asks for it
-##    plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
-##    
-##plt.legend()
-##plt.title('simple t-SNE on latent space')
-##fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
-#
-#_cs = sns.color_palette(n_colors=len(experiment_lengths))
-#
-#
-#used_until = 0
-#for i, l in enumerate(experiment_lengths):
-#    plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
-#    used_until += l
+# # preprocessing
 
 # <codecell>
 
 def to_int_value(frame_with_label):
     return np.array([l.label.value for l in frame_with_label[:,1]])
 
-# <markdowncell>
+# <codecell>
 
-# # preprocessing
+if run_cfg['data_type'] == config.DataType.ANGLE_3D:
+    frame_data, frame_labels, selected_columns, normalisation_factors = preprocessing.preprocess_angle_3d_data(
+        frame_data, frame_labels, **run_cfg.value('angle_3d_params', 'preprocessing'))
+if run_cfg['data_type'] == config.DataType.POS_2D:
+    selected_columns = None
+    frame_data, frame_labels = preprocessing.preprocess_pos_2d_data(frame_data, frame_labels)
 
 # <codecell>
 
@@ -227,37 +126,6 @@ if run_cfg['use_time_series']:
 
 # <codecell>
 
-## full preprocessing pipeline
-#
-## scaling the data to be in [0, 1]
-## this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
-##scaler = MinMaxScaler()
-#scaler = StandardScaler()
-#
-##
-## reshapping the data 
-##
-#
-## TODO bring this in order! (or in better order)
-#
-#if run_config['use_time_series']:
-#    # it's the shitty logical combination of these values
-#    # TODO the scaling should be learned on the training data only, but this is a bit tricky due to how we do the time-sequences
-#    # TODO right now the training and testing data are just concatenated time-sequences, experiment overlapping. which is bad.
-#    warnings.warn('this is not proper, fix the bugs here')
-#    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-#        reshaped_joint_position = scaler.fit_transform(misc.prep_2d_pos_data(joint_positions))
-#    else:
-#        reshaped_joint_position = scaler.fit_transform(joint_positions)
-#        
-#    reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
-#else:
-#    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-#        # angle data is already flat
-#        reshaped_joint_position = misc.prep_2d_pos_data(joint_positions)
-#    else:
-#        reshaped_joint_position = joint_positions
-#
 ##
 ## debugging overwrite
 ##
@@ -296,36 +164,6 @@ if run_cfg['use_time_series']:
 #    else:
 #        reshaped_joint_position = _dummy_data_
 #        labels = _dummy_labels_
-#
-##
-## split and apply scaler
-##
-#
-#if reshaped_joint_position.shape[0] > 10**5:
-#    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.9)
-#else:
-#    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
-#
-#if run_config['use_time_series']:
-#    data_train = reshaped_joint_position[:n_of_data_points]
-#    data_test = reshaped_joint_position[n_of_data_points:]
-#    labels_train = labels[:n_of_data_points]
-#    labels_test = labels[n_of_data_points:]
-#    print('train')
-#    display.display(pd.DataFrame(data_train[:, -1, :]).describe())
-#    print('test')
-#    display.display(pd.DataFrame(data_test[:, -1, :]).describe())
-#else:
-#    data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
-#    data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
-#    labels_train = labels[:n_of_data_points]
-#    labels_test = labels[n_of_data_points:]
-#    print('train')
-#    display.display(pd.DataFrame(data_train).describe())
-#    print('test')
-#    display.display(pd.DataFrame(data_test).describe())
-#    
-#print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
 
 # <codecell>
 
@@ -337,18 +175,14 @@ reload(plots)
 #
 # Making sure that the train/test distributions are not too different from each other
 #
-if run_cfg['use_time_series']:
-    _plt_data_idx_ = np.s_[:, -1, :]
-else:
-    _plt_data_idx_ = np.s_[:]
     
-if run_cfg['data_type'] == data_loading.DataType.ANGLE_3D:
-    fig = plots.plot_3d_angle_data_distribution(X_train[_plt_data_idx_],
-                                                X_test[_plt_data_idx_],
-                                                selected_columns, 
-                                                exp_desc=run_cfg.description())
-else:
-    fig = plots.plot_2d_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], exp_desc=config.config_description(run_config))
+#if run_cfg['data_type'] == data_loading.DataType.ANGLE_3D:
+#    fig = plots.plot_3d_angle_data_distribution(X_train[_plt_data_idx_],
+#                                                X_test[_plt_data_idx_],
+#                                                selected_columns, 
+#                                                exp_desc=run_cfg.description())
+#else:
+#    fig = plots.plot_2d_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], exp_desc=run_config.description())
 
 # <markdowncell>
 
@@ -468,19 +302,15 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
     ax2 = plt.subplot(gs[-1:, :1])
     ax3 = plt.subplot(gs[-1:, 1:])
 
-    #plt.figure(figsize=(20, 12))
-    #fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
-    for cluster in np.unique(cluster_assignments):
-        c_idx = cluster_assignments == cluster
-        sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
-                        X_latent_mean_tsne_proj[c_idx, 1], 
-                        label=cluster, 
-                        ax=ax1,
-                        color=cluster_colors[cluster], 
-                        style=y[c_idx, -1],
-                        legend=False)
-        sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2, legend=False)
-        sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3, legend=False)
+    plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
+    plot_data['Cluster'] = cluster_assignments
+    plot_data['Class'] = y[:, -1]
+    plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
+    plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
+
+    sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1)
+    sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2)
+    sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3)
 
     ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
     ax2.set_title('mean')
@@ -503,10 +333,36 @@ from som_vae.losses import purity as P
 
 # <codecell>
 
-from som_vae.losses.normalized_mutual_information import normalized_mutual_information
-from som_vae.losses.purity import purity
+def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_config, epochs):
+    fig, axs = plt.subplots(3 * 2, real.shape[2], sharex=True, figsize=(25, 10))
 
-def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=run_cfg):
+    for dim in range(2):
+        for leg in range(3):
+            for limb in range(5):
+                axs[2 * leg][dim].plot(real[:, limb + leg * 5, dim])
+                axs[2 * leg + 1][dim].plot(reconstructed[:, limb + leg * 5, dim])
+
+    for leg in range(3):
+        axs[2*leg][0].set_ylabel('input')
+        axs[2*leg + 1][0].set_ylabel('reconstructed')
+
+        axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg][1])
+        axs[2*leg + 1][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][1])
+
+        axs[2*leg][1].set_yticks([])
+        axs[2*leg + 1][1].set_yticks([])
+
+    fig.align_ylabels(axs)
+    fig.suptitle(f"Comparing input and reconstruction")
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png"
+    plt.savefig(figure_path)
+    return figure_path
+
+# <codecell>
+
+def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=None):
     xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
     fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
     for i, cn in enumerate(data_loading.get_3d_columns_names(selected_columns)):
@@ -528,6 +384,16 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
     plt.savefig(figure_path)
     return figure_path
 
+# <codecell>
+
+X_eval.shape
+
+# <codecell>
+
+from som_vae.losses.normalized_mutual_information import normalized_mutual_information
+from som_vae.losses.purity import purity
+
+
 def eval_model(training_results, X, X_eval, y, y_frames, run_config):
     model = training_results['model']
     #train_reports = training_results['train_report']
@@ -536,17 +402,35 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config):
     exp_desc = run_config.description(short=False)
     exp_desc_short = run_config.description()
 
-    X_hat_eval = _reshape_and_rescale_(model(X, apply_sigmoid=False).numpy()[back_to_single_time])
+    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time])
     
-    plot_recon_path = plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, len(training_results['train_reports']))
+    if run_config['data_type'] == config.DataType.ANGLE_3D:
+        plot_recon_path = plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
+                                                                   epochs=len(training_results['train_reports']), 
+                                                                   run_config=run_config)
+    else:
+        plot_recon_path = plot_reconstruction_comparision_pos_2d(X_eval, X_hat_eval, 
+                                                                 epochs=len(training_results['train_reports']), 
+                                                                 run_config=run_config)
+
                 
     X_latent = get_latent_space(training_results['model'], X)
     X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
     cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
-    plot_latent_path = plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs=len(training_results['train_reports']))
+    return (X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, len(training_results['train_reports']))
+                                                                                      
+    plot_latent_path = plot_latent_space(X_latent,
+                                         X_latent_mean_tsne_proj,
+                                         y,
+                                         cluster_assignments,
+                                         run_config,
+                                         epochs=len(training_results['train_reports']))
                 
-    group_videos = list(video.group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_config))
+    group_videos = list(video.group_video_of_clusters(cluster_assignments,
+                                                      y_frames[back_to_single_time],
+                                                      run_config, 
+                                                      epochs=len(training_results['train_reports'])))
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
 
@@ -571,19 +455,6 @@ else:
     back_to_single_time = np.s_[:]
     
 X_eval = _reshape_and_rescale_(X[back_to_single_time])
-
-# <codecell>
-
-reload(vae_training)
-
-# <codecell>
-
-vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-
-# <codecell>
-
-reload(tf_helpers)
-reload(vae_training)
 
 # <codecell>
 
@@ -619,39 +490,187 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150):
 
 # <codecell>
 
-#grid_search_params = {
-#    'model_impl': [config.ModelType.PADD_CONV, config.ModelType.SKIP_PADD_CONV, config.ModelType.TEMP_CONV],
-#    'latent_dim': [12, 16]
-#}
-#
-#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=4))
-#
-#dump_results(grid_search_results, 'grid_search_only_vae')
+grid_search_params = {
+    'data_type': config.DataType.POS_2D, # config.DataType.values(),
+    'model_impl': config.ModelType.values(),
+    'latent_dim': [12, 16]
+}
+
+if SetupConfig.runs_on_lab_server():
+    grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=100))
+    dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
-#grid_search_results
+grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
+dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
+reload(tf_helpers)
 reload(vae_training)
-reload(video)
-epochs = 4
-eval_steps = 2
-run_cfg['latent_dim'] = 6
-vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-vae_training_results = {}
-eval_results = []
-for u in range(np.int(epochs / eval_steps)):
-    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                              train_dataset=train_dataset, 
-                                              test_dataset=test_dataset,
-                                              early_stopping=False,
-                                              n_epochs=eval_steps)
+
+# <codecell>
+
+if not SetupConfig.runs_on_lab_server():
+    reload(vae_training)
+    epochs = 14
+    eval_steps = 7
+    run_cfg['latent_dim'] = 6
+    vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+    vae_training_results = {}
+    eval_results = []
+    for u in range(np.int(epochs / eval_steps)):
+        vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                  train_dataset=train_dataset, 
+                                                  test_dataset=test_dataset,
+                                                  early_stopping=False,
+                                                  n_epochs=eval_steps)
+
+        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
     eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
-eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
+# <codecell>
+
+latent_plotvars = eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
+
+# <codecell>
+
+
+cluster_colors = np.zeros((X_latent_mean_tsne_proj.shape[0], cluster_colors_.shape[1]))
+
+#plt.figure(figsize=(20, 12))
+#fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
+for cluster in np.unique(cluster_assignments):
+    c_idx = cluster_assignments == cluster
+    cluster_colors[c_idx] = cluster_colors_[cluster]
+    
+    
+sns.scatterplot(X_latent_mean_tsne_proj[:, 0], 
+                X_latent_mean_tsne_proj[:, 1], 
+                label=cluster, 
+                ax=ax1,
+                color=cluster_colors, 
+                style=y[:, -1],
+                legend='brief')
+
+# <codecell>
+
+X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs = latent_plotvars
+cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+fig = plt.figure(figsize=(20, 18))
+gs = gridspec.GridSpec(3, 2, figure=fig)
+ax1 = plt.subplot(gs[:2, :])
+ax2 = plt.subplot(gs[-1:, :1])
+ax3 = plt.subplot(gs[-1:, 1:])
+
+plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
+plot_data['Cluster'] = cluster_assignments
+plot_data['Class'] = y[:, -1]
+plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
+plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
+
+sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1)
+sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2)
+sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3)
+
+ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
+ax2.set_title('mean')
+ax3.set_title('var');
+
+# <codecell>
+
+y.shape
+
+# <codecell>
+
+cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+
+# <codecell>
+
+cluster_colors[0]
+
+# <codecell>
+
+plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
+plot_data['cluster_assignment'] = cluster_assignments
+plot_data['class_assignment'] = y[:, -1]
+colors = np.zeros((cluster_assignments.shape[0], 3))
+
+for i, cluster in enumerate(np.unique(cluster_assignments)):
+    c_idx = cluster_assignments == cluster
+    colors[c_idx, :] = cluster_colors[i]
+
+sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='class_assignment', hue='cluster_assignment')
+
+# <codecell>
+
+axs_legends[0].get_
+
+# <codecell>
+
+matplotlib.markers
+
+# <codecell>
+
+plt.matplotlib.markers.MarkerStyle.markers
+
+# <codecell>
+
+latent_plotvars
+
+# <codecell>
+
+_t =list(axs_legends[0].get_texts())[0]
+
+# <codecell>
+
+_t.m()
+
+# <codecell>
+
+list(axs_legends[0]())
+
+# <codecell>
+
+_t = list(axs_legends[0].get_texts())[0]
+
+# <codecell>
+
+len(np.unique(np.array([t.get_text() for t in axs_legends[0].get_texts()])))
+
+# <codecell>
+
+len(np.unique(latent_plotvars[3]))
+
+# <codecell>
+
+_t
+
+# <codecell>
+
+_t.get_text()
+
+# <codecell>
+
+model_loaded(X)
+
+# <codecell>
+
+vae_training_args
+
+# <codecell>
+
+from som_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv
+
+# <codecell>
+
+model_loaded = DrosophVAESkipConv(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
+
+# <codecell>
+
+model_loaded.load_weights(vae_training_args['model_checkpoints_path'])
 
 # <codecell>
 

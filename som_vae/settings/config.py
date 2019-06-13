@@ -100,10 +100,15 @@ class SetupConfig(BaseConfig):
         self['experiment_limb_pos_data_dir'] = '{base_experiment_path}/behData/images/'
         self['fly_image_template'] = f"{{base_experiment_path}}/behData/images/camera_{self['camera_of_interest']}_img_{{image_id:0>6}}.jpg"
 
-#################################################
+    @classmethod
+    def runs_on_lab_server(cls):
+        return get_hostname() == 'upramdyapc6'E
+
+
+###############################################[MaF##
 #                                               #
-# Run config, model definition, hyperparameters #
-#                                               #
+# Run config, model definition, hyperparameters #F
+#                                               #[MaF
 #################################################
 
 # Note that not all variables will be used by all models
@@ -142,6 +147,9 @@ class RunConfig(BaseConfig):
             }
         },
         'pos_2d_params': {
+            'preprocessing': {
+                'normalize_for_each_experiment': True
+            },
         },
         'model_created_at': None,
         'supervised_learning_rate': 0.00005

@@ -64,39 +64,39 @@ def ploting_frames(joint_positions):
 
 
 @save_figure
-def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, generated_positions, validation_cut_off=None, exp_desc=None):
-    fig, axs = plt.subplots(len(config.LEGS), config.NB_OF_AXIS * 3, sharex=True, figsize=(25, 10))
+def plot_comparing_joint_position_with_reconstructed(real_joint_positions, reconstructed_joint_positions, validation_cut_off=None, exp_desc=None):
+    fig, axs = plt.subplots(3, 2 * 2, sharex=True, figsize=(25, 10))
 
-    for idx_leg, leg in enumerate(config.LEGS):
-        for axis in range(config.NB_OF_AXIS):
+    for idx_leg, leg in enumerate(SetupConfig.value('legs')):
+        for axis in range(SetupConfig.value('n_axis')):
             cur_ax = axs[idx_leg][axis * 3]
             rec_ax = axs[idx_leg][axis * 3 + 1]
-            gen_ax = axs[idx_leg][axis * 3 + 2]
+            #gen_ax = axs[idx_leg][axis * 3 + 2]
 
 
             if validation_cut_off is not None:
                 for a in [cur_ax, rec_ax]:
                     a.axvline(validation_cut_off, label='validation cut off', linestyle='--')
 
-            for tracked_point in range(config.NB_TRACKED_POINTS):
+            for tracked_point in range(SetupConfig.value('n_tracked_points')):
                 _label_ = f"{_get_feature_name_(tracked_point)}_{('x' if axis == 0 else 'y')}"
                 cur_ax.plot(real_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
                 rec_ax.plot(reconstructed_joint_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
-                gen_ax.plot(generated_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
+                #gen_ax.plot(generated_positions[:, _get_feature_id_(leg, tracked_point),  axis], label=_label_)
 
                 cur_ax.get_shared_y_axes().join(cur_ax, rec_ax)
-                cur_ax.get_shared_y_axes().join(cur_ax, gen_ax)
+                #cur_ax.get_shared_y_axes().join(cur_ax, gen_ax)
                 rec_ax.set_yticks([])
-                gen_ax.set_yticks([])
+                #gen_ax.set_yticks([])
 
     for i in range(config.NB_OF_AXIS):
         axs[0][i * 3].set_title('input data')
         axs[0][i * 3 + 1].set_title('reconstructed data')
-        axs[0][i * 3 + 2].set_title('generated data')
+        #axs[0][i * 3 + 2].set_title('generated data')
 
         axs[-1][i * 3].set_xlabel('frames')
         axs[-1][i * 3 + 1].set_xlabel('frames')
-        axs[-1][i * 3 + 2].set_xlabel('frames')
+        #axs[-1][i * 3 + 2].set_xlabel('frames')
 
     for i in range(len(config.LEGS)):
         axs[i][0].set_ylabel(f"{_get_leg_name_(leg)}: x pos")

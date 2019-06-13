@@ -11,18 +11,27 @@ from functional import seq
 from som_vae.settings import skeleton
 from som_vae.settings.data import EXPERIMENTS, LABELLED_SEQUENCES, experiment_key, Behavior, LabelledSequence
 from som_vae.settings.config import DataType, SetupConfig
+from som_vae import preprocessing
 
 
 
 def _load_and_fix_(sequence, data):
     # I have no clue why I need to do this. Semihg knows of this data problem.
-    e = min(sequence.sequence[1], data.shape[0])
+    e = min(sequence.sequence[1], data[0].shape[0])
     s = LabelledSequence(**{**sequence._asdict(),
                                    'sequence': (sequence.sequence[0], e)})
 
-    d = data[sequence.sequence[0]:e]
+    d = data[0][sequence.sequence[0]:e]
 
-    return s, d
+    return s, d, data[1]
+
+def _standarize_(data):
+    m = np.mean(data, axis=0)
+    data = data - m
+    s = np.std(data, axis=0)
+    data /= s
+
+    return data, (m, s)
 
 
 def load_labelled_data(run_config, setup_config):
@@ -47,30 +56,52 @@ def load_labelled_data(run_config, setup_config):
                            experiment_path_template=setup_config['experiment_path_template'],
                            positional_data_path_template=setup_config['experiment_limb_pos_data_dir'])
 
-    # dict of experiments and their data
+    # experiment_key, experiment_data (for each fly, the lowest experiment-unit)
     data_raw = seq(EXPERIMENTS).map(lambda x: (experiment_key(obj=x), get_pos_data(x)))\
-                               .filter(lambda x: x[1] is not None)\
-                               .to_dict()
+                               .filter(lambda x: x[1] is not None)
+
+    def _map_values_(fn):
+        return lambda x: (x[0], fn(x[1]))
+
+    if run_config['data_type'] == DataType.POS_2D:
+        #data_raw = data_raw\ #.map(_map_values_(preprocessing._simple_checks_))\
+        data_raw = data_raw.map(_map_values_(preprocessing._get_camera_of_interest_))\
+                .map(_map_values_(preprocessing._get_visible_legs_))\
+                .map(_map_values_(preprocessing.get_only_first_legs))
+
+    data_raw = data_raw.to_dict()
+
+    if run_config['data_type'] == DataType.POS_2D and run_config.value(
+            'pos_2d_params', 'preprocessing', 'normalize_for_each_experiment'):
+        data_raw = {exp_id: _standarize_(data) for exp_id, data in data_raw.items()}
+    else:
+        data_raw = {exp_id: (data, (None, None)) for exp_id, data in data_raw.items()}
 
 
-
-    generator = seq(LABELLED_SEQUENCES).filter(lambda x: experiment_key(obj=x) in data_raw)
+    # if the data is somehow missing for some experiments...
+    labelled_sequences = seq(LABELLED_SEQUENCES).filter(lambda x: experiment_key(obj=x) in data_raw)
 
     if run_config['use_single_fly']:
-        # I called him Hubert.
+        # I called it (him? her?, x?) Hubert.
+        # filter but use all experiments done on Hubert
         hubert = SetupConfig.value('hubert')
-        generator = generator.filter(lambda x: x.study_id == hubert['study_id'] and x.fly_id == hubert['fly_id'])
-        #generator = generator.filter(lambda x: experiment_key(obj=x) ==
+        labelled_sequences = labelled_sequences.filter(lambda x: x.study_id == hubert['study_id'] and x.fly_id == hubert['fly_id'])
+        #labelled_sequences = labelled_sequences.filter(lambda x: experiment_key(obj=x) ==
         #                             experiment_key(**SetupConfig.value('hubert')))
 
-    generator = generator.map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)]))
+    labelled_sequences = labelled_sequences.map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)]))
 
-    sequence_labels, sequence_data = zip(*generator)
+    sequence_labels, sequence_data, normalisation_factors = zip(*labelled_sequences)
+    normalisation_factors = dict(zip((experiment_key(obj=l) for l in sequence_labels),
+                                 normalisation_factors))
+
+    # up to here you can play around with each experiment by itself
     frame_data = np.vstack(sequence_data)
-    frame_labels = seq(sequence_labels).flat_map(lambda x: [(i, x) for i in range(*x.sequence)]).to_list()
+    # flat out the label for each frame in the sequence
+    frame_labels = np.array(seq(sequence_labels)\
+                            .flat_map(lambda x: [(i, x) for i in range(*x.sequence)]).to_list())
 
-    #return sequence_data, frame_labels, sequence_labels
-    return frame_data, frame_labels
+    return frame_data.astype(np.float32), frame_labels, normalisation_factors
 
 def get_data_and_normalization(experiments, normalize_data=False, dimensions='2d', return_with_experiment_id=False):
     if normalize_data and return_with_experiment_id:

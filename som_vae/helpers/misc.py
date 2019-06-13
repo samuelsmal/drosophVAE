@@ -53,6 +53,10 @@ class EEnum(Enum):
     def list(cls):
         return list(map(lambda c: c.name, cls))
 
+    @classmethod
+    def values(cls):
+        return cls.list()
+
 
 def create_parents(path):
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
