@@ -36,7 +36,7 @@ def init(input_shape, run_config, reset_graph=True):
 
     if run_config['model_impl'] == ModelType.TEMP_CONV:
         model = DrosophVAE(run_config['latent_dim'],
-                           input_shape=data_train.shape[1:],
+                           input_shape=input_shape,
                            batch_size=run_config['batch_size'],
                            n_layers=run_config['n_conv_layers'],
                            dropout_rate_temporal=run_config['dropout_rate'],

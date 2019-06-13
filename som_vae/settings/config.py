@@ -143,7 +143,8 @@ class RunConfig(BaseConfig):
         },
         'pos_2d_params': {
         },
-        'model_created_at': None
+        'model_created_at': None,
+        'supervised_learning_rate': 0.00005
     }
 
     def __init__(self, **kwargs):
