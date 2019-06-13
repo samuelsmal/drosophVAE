@@ -419,9 +419,12 @@ def pad_with_last(list_of_lists):
 
     return [_pad_with_last_(ls, max_len) for ls in list_of_lists]
 
-def group_video_of_cluster(cluster_id, paths, run_config, epochs, n_sequences_to_draw=9):
-    images = pad_with_last([[resize_image(Image.open(p)) for p in ax1] for ax1 in paths])
-    #images = [[resize_image(Image.open(p)) for p in ax1] for ax1 in paths[:n_sequences_to_draw]]
+def group_video_of_cluster(cluster_id, paths, run_config, epochs, n_sequences_to_draw=9,
+                           pad_videos=False):
+    images = [[resize_image(Image.open(p)) for p in ax1] for ax1 in paths[:n_sequences_to_draw]]
+
+    if pad_videos:
+        images = pad_with_last(images)
 
     img = images[0][0]
 

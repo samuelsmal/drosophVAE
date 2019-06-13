@@ -19,17 +19,17 @@ from som_vae.models import DrosophVAE, DrosophVAEConv, DrosophVAESkipConv
 #train_dataset = to_tf_data(data_train, labels_as_int[run_config['time_series_length'] - 1:len(data_train)+run_config['time_series_length'] - 1])
 #test_dataset = to_tf_data(data_test, labels_as_int[len(data_train) + run_config['time_series_length'] - 1:])
 
-def init(run_config, reset_graph=False):
+def init(model, run_config, reset_graph=False):
 
     if reset_graph:
         tf.reset_default_graph()
 
+    #optimizer = tf.train.AdadeltaOptimizer(1e-4)
+
     if run_config['optimizer'] == 'Adam':
-        optimizer = tf.train.AdamOptimizer(1e-4)
+        optimizer = tf.train.AdamOptimizer(run_config['supervised_learning_rate'])
     else:
         raise NotImplementedError
-
-    #optimizer = tf.train.AdadeltaOptimizer(1e-4)
 
     cfg_description = f"{run_config.description()}_supervised"
     base_path = f"{SetupConfig.value('data_root_path')}/tvae_logs/{cfg_description}"
@@ -37,14 +37,17 @@ def init(run_config, reset_graph=False):
     train_summary_writer = tfc.summary.create_file_writer(base_path + '/train')
     test_summary_writer = tfc.summary.create_file_writer(base_path + '/test')
 
-    return optimizer, train_summary_writer, test_summary_writer, model_checkpoints_path
+    return {'model': model,
+            'optimizer': optimizer,
+            'train_summary_writer': train_summary_writer,
+            'test_summary_writer': test_summary_writer,
+            'model_checkpoints_path': model_checkpoints_path}
 
-
-def compute_gradients(model, x):
+def compute_gradients(model, x, y):
     with tf.GradientTape() as tape:
         #mean, var = model(x)
         #encoded = tf.nn.l2_normalize(((mean, var)))
-        loss = compute_loss_labels(tf.concat(model(x[0]), axis=1), [1])
+        loss = compute_loss_labels(tf.concat(model(x), axis=1), y)
         return tape.gradient(loss, model.trainable_variables), loss
 
 

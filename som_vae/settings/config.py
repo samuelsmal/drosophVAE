@@ -102,7 +102,7 @@ class SetupConfig(BaseConfig):
 
     @classmethod
     def runs_on_lab_server(cls):
-        return get_hostname() == 'upramdyapc6'E
+        return get_hostname() == 'upramdyapc6'
 
 
 ###############################################[MaF##
@@ -224,6 +224,9 @@ class RunConfig(BaseConfig):
         """Helper to return one single value (may be what ever that value is).
 
         E.g. value('hubert', 'fly_id')
+
+        NOTE THAT THIS IS NOT THE SAME METHOD FROM THE BASE CLASS.
+        This one here is "alive" the other is one is "dead".
         """
         try:
             val = reduce(lambda d, k: d[k], keys, self)

@@ -286,10 +286,6 @@ LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 # <codecell>
 
-np.array([y.label.name for _, y in y_frames[back_to_single_time]])
-
-# <codecell>
-
 def get_latent_space(model, X):
     if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
         return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
@@ -312,9 +308,9 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
     plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
     plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
 
-    sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1)
-    sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2)
-    sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3)
+    sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1, palette=cluster_colors)
+    sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2, palette=cluster_colors)
+    sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3, palette=cluster_colors)
 
     ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
     ax2.set_title('mean')
@@ -387,10 +383,6 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
     figure_path = f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png"
     plt.savefig(figure_path)
     return figure_path
-
-# <codecell>
-
-X_eval.shape
 
 # <codecell>
 
@@ -505,8 +497,8 @@ if SetupConfig.runs_on_lab_server():
 
 # <codecell>
 
-grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
-dump_results(grid_search_results, 'grid_search_only_vae')
+#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
+#dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
@@ -536,144 +528,38 @@ if not SetupConfig.runs_on_lab_server():
 
 # <codecell>
 
-latent_plotvars = eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
-
-# <codecell>
-
-
-cluster_colors = np.zeros((X_latent_mean_tsne_proj.shape[0], cluster_colors_.shape[1]))
-
-#plt.figure(figsize=(20, 12))
-#fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
-for cluster in np.unique(cluster_assignments):
-    c_idx = cluster_assignments == cluster
-    cluster_colors[c_idx] = cluster_colors_[cluster]
-    
-    
-sns.scatterplot(X_latent_mean_tsne_proj[:, 0], 
-                X_latent_mean_tsne_proj[:, 1], 
-                label=cluster, 
-                ax=ax1,
-                color=cluster_colors, 
-                style=y[:, -1],
-                legend='brief')
-
-# <codecell>
-
-X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs = latent_plotvars
-cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-fig = plt.figure(figsize=(20, 18))
-gs = gridspec.GridSpec(3, 2, figure=fig)
-ax1 = plt.subplot(gs[:2, :])
-ax2 = plt.subplot(gs[-1:, :1])
-ax3 = plt.subplot(gs[-1:, 1:])
-
-plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
-plot_data['Cluster'] = cluster_assignments
-plot_data['Class'] = y[:, -1]
-plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
-plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
-
-sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1)
-sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2)
-sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3)
-
-ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
-ax2.set_title('mean')
-ax3.set_title('var');
-
-# <codecell>
-
-y.shape
-
-# <codecell>
-
-cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-
-# <codecell>
-
-cluster_colors[0]
-
-# <codecell>
-
-plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
-plot_data['cluster_assignment'] = cluster_assignments
-plot_data['class_assignment'] = y[:, -1]
-colors = np.zeros((cluster_assignments.shape[0], 3))
-
-for i, cluster in enumerate(np.unique(cluster_assignments)):
-    c_idx = cluster_assignments == cluster
-    colors[c_idx, :] = cluster_colors[i]
-
-sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='class_assignment', hue='cluster_assignment')
-
-# <codecell>
-
-axs_legends[0].get_
-
-# <codecell>
-
-matplotlib.markers
-
-# <codecell>
-
-plt.matplotlib.markers.MarkerStyle.markers
-
-# <codecell>
-
-latent_plotvars
-
-# <codecell>
-
-_t =list(axs_legends[0].get_texts())[0]
-
-# <codecell>
-
-_t.m()
-
-# <codecell>
-
-list(axs_legends[0]())
-
-# <codecell>
-
-_t = list(axs_legends[0].get_texts())[0]
-
-# <codecell>
-
-len(np.unique(np.array([t.get_text() for t in axs_legends[0].get_texts()])))
-
-# <codecell>
-
-len(np.unique(latent_plotvars[3]))
-
-# <codecell>
-
-_t
-
-# <codecell>
-
-_t.get_text()
-
-# <codecell>
-
-model_loaded(X)
-
-# <codecell>
-
-vae_training_args
-
-# <codecell>
-
 from som_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv
 
 # <codecell>
 
-model_loaded = DrosophVAESkipConv(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
+# dummy modelM
+#model_loaded = DrosophVAESkipConv(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
+#model_loaded.load_weights(vae_training_args['model_checkpoints_path'])
 
 # <codecell>
 
-model_loaded.load_weights(vae_training_args['model_checkpoints_path'])
+#from tensorflow.python.eager import context
+#context.context()._clear_caches()  # Increasing memory and PyObject count without this
+#import gc
+#gc.collect()
+#print(len(gc.get_objects()))
+
+# <codecell>
+
+reload(supervised_training)
+
+# <codecell>
+
+supervised_training_args = supervised_training.init(model=vae_training_results['model'].inference_net, run_config=run_cfg)
+supervised_training_results = {}
+supervised_eval_results = []
+
+for u in range(np.int(epochs / eval_steps)):
+    supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                              train_dataset=train_dataset, 
+                                              test_dataset=test_dataset,
+                                              early_stopping=False,
+                                              n_epochs=eval_steps)
 
 # <codecell>
 
