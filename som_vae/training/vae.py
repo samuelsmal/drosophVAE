@@ -51,7 +51,7 @@ def init(input_shape, run_config, reset_graph=True):
     elif run_config['model_impl'] == ModelType.SKIP_PADD_CONV:
         model = DrosophVAESkipConv(**model_config)
     else:
-        raise ValueError('not such model')
+        raise ValueError(f"no such model: {run_config['model_impl']}")
 
     model.inference_net.summary(line_length=100)
     model.generative_net.summary(line_length=100)

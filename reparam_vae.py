@@ -294,7 +294,7 @@ def get_latent_space(model, X):
 
 from matplotlib import gridspec
 
-def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, epochs):
+def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_desc, epochs):
     cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
     fig = plt.figure(figsize=(20, 18))
     gs = gridspec.GridSpec(3, 2, figure=fig)
@@ -315,7 +315,7 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
     ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
     ax2.set_title('mean')
     ax3.set_title('var')
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_latent_space_tsne.png"
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_latent_space_tsne.png"
     plt.savefig(figure_path)
     return figure_path
 
@@ -333,7 +333,7 @@ from som_vae.losses import purity as P
 
 # <codecell>
 
-def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_config, epochs):
+def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs):
     fig, axs = plt.subplots(3 * 2, real.shape[2], sharex=True, figsize=(25, 10))
 
     for dim in range(2):
@@ -356,13 +356,13 @@ def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_config, epoc
     fig.suptitle(f"Comparing input and reconstruction")
     plt.tight_layout()
     plt.subplots_adjust(top=0.9)
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png"
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
     plt.savefig(figure_path)
     return figure_path
 
 # <codecell>
 
-def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_config=None):
+def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_desc=None):
     xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
     fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
     for i, cn in enumerate(data_loading.get_3d_columns_names(selected_columns)):
@@ -376,11 +376,11 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
     axs[0].legend(loc='upper left')
     
     #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    plt.suptitle(f"Comparision of selection of data\n({run_config.description()}_e-{epochs})")
+    plt.suptitle(f"Comparision of selection of data\n({run_desc}_e-{epochs})")
     
     plt.tight_layout()
     plt.subplots_adjust(top=0.94)
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_config.description()}_e-{epochs}_input_gen_recon_comparision.png"
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
     plt.savefig(figure_path)
     return figure_path
 
@@ -390,24 +390,27 @@ from som_vae.losses.normalized_mutual_information import normalized_mutual_infor
 from som_vae.losses.purity import purity
 
 
-def eval_model(training_results, X, X_eval, y, y_frames, run_config):
+def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
     model = training_results['model']
     #train_reports = training_results['train_report']
     #test_reports= training_results['test_report']
 
     exp_desc = run_config.description(short=False)
     exp_desc_short = run_config.description()
+    
+    if supervised:
+        exp_desc_short = 'supervised' + exp_desc_short
 
     X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time])
     
     if run_config['data_type'] == config.DataType.ANGLE_3D:
         plot_recon_path = plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
                                                                    epochs=len(training_results['train_reports']), 
-                                                                   run_config=run_config)
+                                                                   run_desc=exp_desc_short)
     else:
         plot_recon_path = plot_reconstruction_comparision_pos_2d(X_eval, X_hat_eval, 
                                                                  epochs=len(training_results['train_reports']), 
-                                                                 run_config=run_config)
+                                                                 run_desc=exp_desc_short)
 
                 
     X_latent = get_latent_space(training_results['model'], X)
@@ -419,12 +422,12 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config):
                                          X_latent_mean_tsne_proj,
                                          np.array([y.label.name for _, y in y_frames[back_to_single_time]]),
                                          cluster_assignments,
-                                         run_config,
+                                         exp_desc_short,
                                          epochs=len(training_results['train_reports']))
                 
     group_videos = list(video.group_video_of_clusters(cluster_assignments,
                                                       y_frames[back_to_single_time],
-                                                      run_config, 
+                                                      exp_desc_short, 
                                                       epochs=len(training_results['train_reports'])))
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
@@ -505,7 +508,7 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
         base_mdl.inference_net = supervised_training_results['model']
         supervised_training_results['model'] = base_mdl 
 
-        eval_model(supervised_training_results, X, X_eval, y, y_frames, run_config)
+        eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)
         
         yield p, 
         vae_training_results['train_reports'], 
@@ -520,7 +523,8 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
 
 grid_search_params = {
     'data_type': [config.DataType.POS_2D], # config.DataType.values(),
-    'model_impl': config.ModelType.values(),
+    'model_impl':  config.ModelType.values()
+,
     'latent_dim': [12, 16]
 }
 
@@ -530,7 +534,11 @@ if SetupConfig.runs_on_lab_server():
 
 # <codecell>
 
-grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=100))
+run_cfg['model_impl'] == config.ModelType.SKIP_PADD_CONV
+
+# <codecell>
+
+grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=5))
 dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
@@ -558,46 +566,6 @@ if not SetupConfig.runs_on_lab_server():
         eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
     eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
-
-# <codecell>
-
-from som_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv
-
-# <codecell>
-
-base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], input_shape=X_train.shape[1:], batch_size=run_cfg['batch_size'])
-base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
-
-reload(supervised_training)
-
-supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=run_cfg)
-supervised_training_results = {}
-supervised_eval_results = []
-
-for u in range(np.int(epochs / eval_steps)):
-    supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
-                                              train_dataset=train_dataset, 
-                                              test_dataset=test_dataset,
-                                              early_stopping=False,
-                                              n_epochs=eval_steps)
-
-base_mdl.inference_net = supervised_training_results['model']
-supervised_training_results['model'] = base_mdl 
-
-eval_model(supervised_training_results, X, X_eval, y, y_frames, run_config)
-
-# <codecell>
-
-#X_train_supervised_dataset = to_tf_data(X_train, preprocessing.frame_label_pair_to_int(y_train), batch_size=run_cfg['batch_size'])
-#X_test_supervised_dataset = to_tf_data(X_train, preprocessing.frame_label_pair_to_int(y_train), batch_size=run_cfg['batch_size'])
-#
-#supervised_training_args = supervised_training.init(run_config=run_cfg)
-#supervised_training_results = supervised_training.train(model.inference_net,
-#                                                        **supervised_training_args,
-#                                                        train_dataset=X_train_supervised_dataset, 
-#                                                        test_dataset=X_test_supervised_dataset,
-#                                                        early_stopping=False,
-#                                                        n_epochs=4)
 
 # <markdowncell>
 

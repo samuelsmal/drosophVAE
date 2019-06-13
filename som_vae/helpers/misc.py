@@ -55,7 +55,8 @@ class EEnum(Enum):
 
     @classmethod
     def values(cls):
-        return cls.list()
+        return list(cls)
+
 
 
 def create_parents(path):
