@@ -286,6 +286,10 @@ LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 # <codecell>
 
+np.array([y.label.name for _, y in y_frames[back_to_single_time]])
+
+# <codecell>
+
 def get_latent_space(model, X):
     if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
         return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
@@ -304,7 +308,7 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
 
     plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
     plot_data['Cluster'] = cluster_assignments
-    plot_data['Class'] = y[:, -1]
+    plot_data['Class'] = y
     plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
     plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
 
@@ -418,11 +422,10 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config):
     X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
     cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
-    return (X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_config, len(training_results['train_reports']))
                                                                                       
     plot_latent_path = plot_latent_space(X_latent,
                                          X_latent_mean_tsne_proj,
-                                         y,
+                                         np.array([y.label.name for _, y in y_frames[back_to_single_time]]),
                                          cluster_assignments,
                                          run_config,
                                          epochs=len(training_results['train_reports']))
