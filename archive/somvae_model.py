@@ -9,7 +9,7 @@ License: MIT License
 import functools
 import tensorflow as tf
 
-from som_vae.temporal_conv_net import TemporalConvNet
+from drosoph_vae.temporal_conv_net import TemporalConvNet
 
 tfl  = tf.layers
 tfk  = tf.keras

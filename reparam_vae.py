@@ -3,7 +3,7 @@
 
 # <codecell>
 
-from som_vae.settings.config import SetupConfig
+from drosoph_vae.settings.config import SetupConfig
 # adapt according to your machine (0 should be fine, if you have a GPU)
 if SetupConfig.runs_on_lab_server():
     %env CUDA_DEVICE_ORDER=PCI_BUS_ID
@@ -58,22 +58,22 @@ tfe.seterr(inf_or_nan='raise')
 # otherwise TF will print soooo many warnings
 warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
 
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
-import som_vae.helpers.tensorflow as tf_helpers
+from drosoph_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+import drosoph_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
-from som_vae.settings.config import SetupConfig, RunConfig
-from som_vae import data_loading
-from som_vae import settings
-from som_vae import preprocessing
-from som_vae.helpers.misc import extract_args, chunks, foldl, if_last
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.settings import data as SD
-from som_vae.helpers import video, plots, misc, jupyter
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
+from drosoph_vae.settings.config import SetupConfig, RunConfig
+from drosoph_vae import data_loading
+from drosoph_vae import settings
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl, if_last
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.settings import data as SD
+from drosoph_vae.helpers import video, plots, misc, jupyter
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
 
 # <codecell>
 
@@ -263,11 +263,11 @@ from hdbscan import HDBSCAN
 from sklearn.manifold import TSNE
 from sklearn.cluster import AgglomerativeClustering
 
-from som_vae.helpers.tensorflow import to_tf_data
-from som_vae.training import vae as vae_training
-from som_vae.training import supervised as supervised_training
-from som_vae.losses.normalized_mutual_information import normalized_mutual_information
-from som_vae.losses.purity import purity
+from drosoph_vae.helpers.tensorflow import to_tf_data
+from drosoph_vae.training import vae as vae_training
+from drosoph_vae.training import supervised as supervised_training
+from drosoph_vae.losses.normalized_mutual_information import normalized_mutual_information
+from drosoph_vae.losses.purity import purity
 
 LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
@@ -313,7 +313,7 @@ reload(supervised_training)
 
 # <codecell>
 
-from som_vae.settings.data import Experiment, experiment_key
+from drosoph_vae.settings.data import Experiment, experiment_key
 
 def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
     #
@@ -476,35 +476,42 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
             vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
         except Exception:
             print(f"problem with {vae_training_args}: {traceback.format_exc()}")
+            next()
             
         #
         # Supervised part
         # 
         
-        # the training process saves the model with the min loss.
-        base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
-        base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+        try:
+            # the training process saves the model with the min loss.
+            base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
+            base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
-        supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
-        supervised_training_results = {}
-        supervised_eval_results = []
+            supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
+            supervised_training_results = {}
+            supervised_eval_results = []
 
-        for u in range(np.int(epochs / eval_steps)):
-            supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
-                                                      train_dataset=train_dataset, 
-                                                      test_dataset=test_dataset,
-                                                      early_stopping=False,
-                                                      n_epochs=eval_steps)
-            
+            for u in range(np.int(epochs / eval_steps)):
+                supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                                          train_dataset=train_dataset, 
+                                                          test_dataset=test_dataset,
+                                                          early_stopping=False,
+                                                          n_epochs=eval_steps)
+
+                base_mdl.inference_net = supervised_training_results['model']
+                supervised_training_results['model'] = base_mdl 
+                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+                supervised_training_results['model'] = base_mdl.inference_net
+
             base_mdl.inference_net = supervised_training_results['model']
             supervised_training_results['model'] = base_mdl 
             supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
             supervised_training_results['model'] = base_mdl.inference_net
-
-        base_mdl.inference_net = supervised_training_results['model']
-        supervised_training_results['model'] = base_mdl 
-        supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
-        supervised_training_results['model'] = base_mdl.inference_net
+        except Exception:
+            print(f"problem with {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
+            next()
+        
+        plt.close('all')
         
         yield (p, 
                vae_training_results['train_reports'], 
@@ -518,11 +525,7 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
 
 # <codecell>
 
-reload(video)
-
-# <codecell>
-
-from som_vae.models import DrosophVAE
+import logging
 
 # <codecell>
 
@@ -531,8 +534,8 @@ from datetime import datetime
 # Either include the data loading into the grid-search or make two runs, one for each DataType
 
 grid_search_params = {
-    'model_impl': [config.ModelType.TEMP_CONV], # config.ModelType.values(),
-    'latent_dim': [1, 2, 4,]
+    'model_impl': config.ModelType.values(),
+    'latent_dim': [1, 2, ]
 }
 
 with warnings.catch_warnings():
@@ -542,8 +545,12 @@ with warnings.catch_warnings():
         grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
     else:
-        grid_search_results = list(grid_search(grid_search_params, eval_steps=3, epochs=4))
+        grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
         misc.dump_results(grid_search_results, 'grid_search_only_vae')
+
+# <codecell>
+
+stop
 
 # <codecell>
 
@@ -671,7 +678,7 @@ eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
 
 # <codecell>
 
-from som_vae.settings.data import Experiment, experiment_key
+from drosoph_vae.settings.data import Experiment, experiment_key
 from PIL import Image
 
 # <codecell>
@@ -969,7 +976,7 @@ print('cluster_vids: ', cluster_vids.keys())
 
 # <codecell>
 
-! cat ./som_vae/helpers/video.py
+! cat ./drosoph_vae/helpers/video.py
 
 # <codecell>
 

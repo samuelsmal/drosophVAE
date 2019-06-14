@@ -46,17 +46,17 @@ from IPython import display
 import sys
 #from drosophpose.GUI import skeleton
 
-from som_vae import somvae_model
-from som_vae.utils import *
+from drosoph_vae import somvae_model
+from drosoph_vae.utils import *
 
-from som_vae.helpers.misc import extract_args, chunks, foldl
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.settings.config import positional_data
-from som_vae.helpers import video, plots
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.settings.config import positional_data
+from drosoph_vae.helpers import video, plots
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
+from drosoph_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
     
 fix_layout()
 enable_logging()
@@ -76,7 +76,7 @@ enable_logging()
 
 # <codecell>
 
-from som_vae import settings
+from drosoph_vae import settings
 
 joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
@@ -467,7 +467,7 @@ else:
 
 _som_dim = [8,8]
 
-som_vae_config = {
+drosoph_vae_config = {
     "num_epochs": 400,
     "patience": 100,
     "batch_size": 30, # len(joint_positions), # if time_series then each batch should be a time series
@@ -496,38 +496,38 @@ som_vae_config = {
     "time_sequence_length": 10
 }
 
-if all(som_vae_config[l] == 0.0 for l in ['alpha', 'beta', 'gamma', 'tau']):
+if all(drosoph_vae_config[l] == 0.0 for l in ['alpha', 'beta', 'gamma', 'tau']):
     _loss_description_ = 'only-recon-loss'
 else:
     _loss_description_ = 'all-losses'
     
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     _time_series_description_ = 'as-time-series'
 else:
     _time_series_description_ = 'no-time-series'
     
 _name_ = f"{config.NB_DIMS}d-{_loss_description_}_{_time_series_description_}"
-som_vae_config['name'] = _name_
-_ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(som_vae_config, sort_keys=True).encode()).hexdigest()[:5])
-som_vae_config['ex_name'] = _ex_name_
+drosoph_vae_config['name'] = _name_
+_ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(drosoph_vae_config, sort_keys=True).encode()).hexdigest()[:5])
+drosoph_vae_config['ex_name'] = _ex_name_
  
-som_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
-som_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
+drosoph_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
+drosoph_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
 
 # <codecell>
 
 # creating path to store model
-pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
-pathlib.Path(som_vae_config['logdir']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(drosoph_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(drosoph_vae_config['logdir']).parent.mkdir(parents=True, exist_ok=True)
 
-_MODEL_CONFIG_PATH_ = pathlib.Path(som_vae_config['logdir']).parent.parent / 'model_configs'
+_MODEL_CONFIG_PATH_ = pathlib.Path(drosoph_vae_config['logdir']).parent.parent / 'model_configs'
 _MODEL_CONFIG_PATH_.mkdir(exist_ok=True)
-with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
-    json.dump(som_vae_config, f)
+with open(f"{_MODEL_CONFIG_PATH_}/{drosoph_vae_config['ex_name']}.json", 'w') as f:
+    json.dump(drosoph_vae_config, f)
 
 # <codecell>
 
-assert not(som_vae_config['time_series'] and config.NB_DIMS == 2), 'this does not work right now'
+assert not(drosoph_vae_config['time_series'] and config.NB_DIMS == 2), 'this does not work right now'
 
 # <markdowncell>
 
@@ -535,7 +535,7 @@ assert not(som_vae_config['time_series'] and config.NB_DIMS == 2), 'this does no
 
 # <codecell>
 
-def to_time_series(data, sequence_length=som_vae_config['time_sequence_length']):
+def to_time_series(data, sequence_length=drosoph_vae_config['time_sequence_length']):
     for i in range(len(data)):
         if i + sequence_length <= len(data):
             yield data[i:i+sequence_length]
@@ -559,19 +559,19 @@ scaler = MinMaxScaler()
 reshaped_joint_position = scaler.fit_transform(reshaped_joint_position)
 
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     # duplicating the elements, e.g.: [0, 1, 2], [1, 2, 3], [2, 3, 4], ...
     # this has a sequence length of 3
     _time_series_idx_ = list(to_time_series(range(len(joint_positions))))
     _jp = np.concatenate([reshaped_joint_position[idx].reshape(1, -1, reshaped_joint_position.shape[1]) for idx in _time_series_idx_], axis=0)\
-            .reshape(-1, som_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1])
-    som_vae_config['input_channels'] = som_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1]
+            .reshape(-1, drosoph_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1])
+    drosoph_vae_config['input_channels'] = drosoph_vae_config['time_sequence_length'] * reshaped_joint_position.shape[1]
 else:
-    som_vae_config['input_length'] = 1
-    som_vae_config['input_channels'] = reshaped_joint_position.shape[1]
+    drosoph_vae_config['input_length'] = 1
+    drosoph_vae_config['input_channels'] = reshaped_joint_position.shape[1]
     _jp = reshaped_joint_position 
     
-assert np.product(_jp.shape[1:]) > som_vae_config['latent_dim'],\
+assert np.product(_jp.shape[1:]) > drosoph_vae_config['latent_dim'],\
        'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
     
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
@@ -590,7 +590,7 @@ data_test = _jp[nb_of_data_points:]
 # just generating some labels, no clue what they are for except validation?
 labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     labels = np.concatenate([labels[idx].reshape(1, -1, 1) for idx in _time_series_idx_], axis=0)[:,-1]
 
 data = {
@@ -614,7 +614,7 @@ reload(somvae_model)
 tf.reset_default_graph()
 
 _args = inspect.getfullargspec(model_main).args
-res, mdl, losses, res_val = model_main(**{**{k:som_vae_config[k] for k in _args if k in som_vae_config}, **data, "config": som_vae_config})
+res, mdl, losses, res_val = model_main(**{**{k:drosoph_vae_config[k] for k in _args if k in drosoph_vae_config}, **data, "config": drosoph_vae_config})
 
 # <codecell>
 
@@ -628,10 +628,10 @@ def _reverse_to_original_shape_(pos_data, input_shape=None):
     return scaler.inverse_transform(pos_data).reshape(pos_data.shape[0], *(input_shape))
 
 
-def _time_series_reverser_(xs, is_time_series=som_vae_config['time_series'], original_size=None):
+def _time_series_reverser_(xs, is_time_series=drosoph_vae_config['time_series'], original_size=None):
     if is_time_series:
         if config.NB_DIMS == 3:
-            return xs.reshape(-1, som_vae_config['time_sequence_length'], joint_positions.shape[1])[:, -1]
+            return xs.reshape(-1, drosoph_vae_config['time_sequence_length'], joint_positions.shape[1])[:, -1]
         else:
             return xs.reshape
     else:
@@ -645,7 +645,7 @@ reconstructed_from_encoding_val    =  _reverse_to_original_shape_(_time_series_r
 # <codecell>
 
 f =plots.plot_losses(losses, title=f'using {config.NB_DIMS}d data and {joint_positions.shape[1]} features')
-p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_losses.png"
+p = f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_losses.png"
 pathlib.Path(p).parent.mkdir(exist_ok=True)
 f.savefig(p)
 plots.plot_latent_frame_distribution(res[2], nb_bins=_latent_dim_)
@@ -659,7 +659,7 @@ plots.plot_cluster_assignment_over_time(res[2])
 
 reload(plots)
 if config.NB_DIMS == 3:
-    if som_vae_config['time_series']:
+    if drosoph_vae_config['time_series']:
         _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
         timed_jp = joint_positions[_time_series_idx_]
     else:
@@ -668,11 +668,11 @@ if config.NB_DIMS == 3:
     f = plots.plot_reconstructed_angle_data(real_data=timed_jp,
                                             reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
                                             columns=angled_data_columns)
-    p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
+    p = f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_angled_plot_.png"
     pathlib.Path(p).parent.mkdir(exist_ok=True)
     f.savefig(p)
 else:
-    if som_vae_config['time_series']:
+    if drosoph_vae_config['time_series']:
         _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
         timed_jp = joint_positions[_time_series_idx_]
 
@@ -696,7 +696,7 @@ def mean_squared_difference(a, b):
     return ((a - b) ** 2).mean()
 
 
-if not som_vae_config['time_series']:
+if not drosoph_vae_config['time_series']:
     # the problem is the train-test split point... not super hard to figure out...
     _n_train_ = len(res[3])
     _idx_ = (s_[:_n_train_,:,:config.NB_DIMS], s_[_n_train_:,:,:config.NB_DIMS]) * 2
@@ -705,7 +705,7 @@ if not som_vae_config['time_series']:
     _loop_data_ = (reconstructed_from_encoding_train, reconstructed_from_encoding_val, reconstructed_from_embedding_train, reconstructed_from_embedding_val)
 
     for i, o, order_split, d in zip(_idx_, _order_, _order_split_, _loop_data_):
-        if som_vae_config['time_series']:
+        if drosoph_vae_config['time_series']:
             print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(timed_jp[i], d)}")
         else:
             print(f"MSE for {o}\t{order_split}:\t{mean_squared_difference(joint_positions[i], d)}")
@@ -716,7 +716,7 @@ if not som_vae_config['time_series']:
 
 # <codecell>
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     raise ValueError('videos and such are not yet done for 3d data')
 
 # <codecell>
@@ -727,7 +727,7 @@ def reverse_pos_pipeline(x, normalisation_term=normalisation_factors):
 
 # <codecell>
 
-from som_vae.helpers.video import _float_to_int_color_
+from drosoph_vae.helpers.video import _float_to_int_color_
 
 # <codecell>
 
@@ -741,7 +741,7 @@ joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed
 
 # <codecell>
 
-from som_vae.settings.data import EXPERIMENTS
+from drosoph_vae.settings.data import EXPERIMENTS
 
 # <codecell>
 
@@ -757,7 +757,7 @@ images_paths_for_experiments = EXPERIMENTS.map(lambda x: (x, config.positional_d
 
 images_paths_for_experiments = np.array(images_paths_for_experiments)[frames_of_interest]
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     images_paths_for_experiments = [images_paths_for_experiments[idx[-1]] for idx in _time_series_idx_]
 
 # <codecell>
@@ -766,7 +766,7 @@ reload(video)
 
 # <codecell>
 
-from som_vae.helpers import misc
+from drosoph_vae.helpers import misc
 from collections import OrderedDict
 
 _N_CLUSTER_TO_VIZ_ = 10
@@ -841,7 +841,7 @@ X_embedded = TSNE(n_components=2, random_state=42).fit_transform(np.concatenate(
 
 # <codecell>
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     _time_series_last_frame_idx_ = [idx[-1] for idx in _time_series_idx_]
 
     training_frames = frames_idx_with_labels[frames_of_interest].iloc[_time_series_last_frame_idx_][:x_hat_latent_train.shape[0]]
@@ -866,18 +866,18 @@ for l, c in behaviour_colours.items():
     
 plt.legend()
 plt.title('simple t-SNE on latent space')
-fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+fig.savefig(f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_tsne.png")
 
 # <codecell>
 
 from IPython.display import Image
-Image(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+Image(f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_tsne.png")
 
 # <codecell>
 
 reload(video)
 warnings.warn('this takes some time to run...')
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     warnings.warn('this code does probably not work with time_series')
     original_jp = timed_jp
 else:
@@ -894,7 +894,7 @@ _p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in
 _embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels) for i in range(len(X_embedded)))
 frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_img in zip(_p, _embedding_imgs))
 
-embedding_with_recon_path = f"../neural_clustering_data/videos/{som_vae_config['ex_name']}_embedding_with_recon.mp4"
+embedding_with_recon_path = f"../neural_clustering_data/videos/{drosoph_vae_config['ex_name']}_embedding_with_recon.mp4"
 video._save_frames_(embedding_with_recon_path, frames)
 display_video(embedding_with_recon_path)
 

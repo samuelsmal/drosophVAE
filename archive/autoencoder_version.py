@@ -49,13 +49,13 @@ from IPython import display
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.manifold import TSNE
 
-from som_vae.helpers.misc import extract_args, chunks, foldl
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.helpers import video, plots, misc, jupyter
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.helpers import video, plots, misc, jupyter
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
+from drosoph_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 
 # <codecell>
 
@@ -63,7 +63,7 @@ jupyter.fix_layout()
 
 # <codecell>
 
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+from drosoph_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
@@ -83,7 +83,7 @@ from functools import reduce
 
 # <codecell>
 
-from som_vae.settings import data as SD
+from drosoph_vae.settings import data as SD
 from importlib import reload
 reload(SD)
 
@@ -125,7 +125,7 @@ if False:
     #    
     #plt.legend()
     #plt.title('simple t-SNE on latent space')
-    #fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+    #fig.savefig(f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_tsne.png")
 
     _cs = sns.color_palette(n_colors=len(experiment_lengths))
 
@@ -137,8 +137,8 @@ if False:
 
 # <codecell>
 
-from som_vae import settings
-from som_vae import preprocessing
+from drosoph_vae import settings
+from drosoph_vae import preprocessing
 
 joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
@@ -632,11 +632,11 @@ for l, c in behaviour_colours.items():
     
 plt.legend()
 plt.title('simple t-SNE on latent space')
-#fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+#fig.savefig(f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_tsne.png")
 
 # <codecell>
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     _time_series_last_frame_idx_ = [idx[-1] for idx in _time_series_idx_]
 
     training_frames = frames_idx_with_labels[frames_of_interest].iloc[_time_series_last_frame_idx_][:x_hat_latent_train.shape[0]]
@@ -661,14 +661,14 @@ for l, c in behaviour_colours.items():
     
 plt.legend()
 plt.title('simple t-SNE on latent space')
-#fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
+#fig.savefig(f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_tsne.png")
 
 # <codecell>
 
 stop
 reload(plots)
 if config.NB_DIMS == 3:
-    if som_vae_config['time_series']:
+    if drosoph_vae_config['time_series']:
         _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
         timed_jp = joint_positions[_time_series_idx_]
     else:
@@ -677,11 +677,11 @@ if config.NB_DIMS == 3:
     f = plots.plot_reconstructed_angle_data(real_data=timed_jp,
                                             reconstructed_data=np.vstack((reconstructed_from_encoding_train, reconstructed_from_encoding_val)), 
                                             columns=angled_data_columns)
-    p = f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_angled_plot_.png"
+    p = f"../neural_clustering_data/figures/{drosoph_vae_config['ex_name']}_angled_plot_.png"
     pathlib.Path(p).parent.mkdir(exist_ok=True)
     f.savefig(p)
 else:
-    if som_vae_config['time_series']:
+    if drosoph_vae_config['time_series']:
         _time_series_idx_ = [t[-1] for t in to_time_series(range(len(joint_positions)))]
         timed_jp = joint_positions[_time_series_idx_]
 

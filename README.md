@@ -5,7 +5,7 @@ Code for my semester project on drosophila behaviour. The overall goal was to de
 can identify new clusters, using the latent-space of an VAE. For this multiple models were designed,
 trained and evaluated. Check out `reparam_vae.ipynb` for an overview, and main entrypoint.
 
-Also `som_vae.settings.config.py` is also very important, you'll define how the data is loaded,
+Also `drosoph_vae.settings.config.py` is also very important, you'll define how the data is loaded,
 hyperparameters, general settings, and much more there.
 
 Sources and inspiration are noted directly next to the applicable source code.
@@ -22,7 +22,7 @@ This project uses Tensorflow 2.0 features, most prominent Eager-mode. So keep th
 ├── reparam_vae.ipynb              # Main entrypoint and training notebook
 │                                  # If you run this a lot of stuff will be saved to disk.
 ├── reparam_vae.py                 # Python version of the notebook
-└── som_vae
+└── drosoph_vae
     ├── data_loading.py            # Main entrypoint to load the data
     ├── helpers                    # Various general helpers and utils
     │   ├── file.py

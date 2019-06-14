@@ -1,0 +1,3 @@
+from drosoph_vae.models.drosoph_vae import DrosophVAE
+from drosoph_vae.models.drosoph_vae_conv import DrosophVAEConv
+from drosoph_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv

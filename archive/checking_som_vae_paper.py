@@ -37,8 +37,8 @@ from sacred.stflow import LogFileWriter
 
 # <codecell>
 
-from som_vae.somvae_model import SOMVAE
-from som_vae.utils import *
+from drosoph_vae.somvae_model import SOMVAE
+from drosoph_vae.utils import *
 
 # <codecell>
 
