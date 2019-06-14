@@ -85,12 +85,12 @@ from sklearn.manifold import TSNE
 import os
 
 #%matplotlib inline
-from som_vae.helpers.misc import extract_args, chunks, foldl
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.helpers import video, plots, misc, jupyter
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.helpers import video, plots, misc, jupyter
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
 
 # <codecell>
 
@@ -125,8 +125,8 @@ def plot_loss(hist):
 
 # <codecell>
 
-from som_vae import settings
-from som_vae import preprocessing
+from drosoph_vae import settings
+from drosoph_vae import preprocessing
 
 joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS)
 
@@ -158,7 +158,7 @@ scaler = StandardScaler()
 print(f"total number of input data:{reshaped_joint_position.shape}")
 
 
-#if som_vae_config['time_series']:
+#if drosoph_vae_config['time_series']:
 #    _time_series_idx_ = list(to_time_series(range(len(joint_positions))))
 #    _jp = np.concatenate([joint_positions[idx].reshape(1, -1, 30) for idx in _time_series_idx_], axis=0)
 #else:
@@ -173,7 +173,7 @@ data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
 # just generating some labels, no clue what they are for except validation?
 #labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
 
-#if som_vae_config['time_series']:
+#if drosoph_vae_config['time_series']:
 #    labels = np.concatenate([labels[idx].reshape(1, -1, 1) for idx in _time_series_idx_], axis=0)
 
 #data = {

@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 # <nbformat>4</nbformat>
 
+# <codecell>
+
+from drosoph_vae.settings.config import SetupConfig
+# adapt according to your machine (0 should be fine, if you have a GPU)
+if SetupConfig.runs_on_lab_server():
+    %env CUDA_DEVICE_ORDER=PCI_BUS_ID
+    %env CUDA_VISIBLE_DEVICES=1
+
 # <markdowncell>
 
 # # VAE using the reparametrization trick
@@ -13,6 +21,8 @@
 
 import json
 from collections import namedtuple
+from functools import partial
+import traceback
 import itertools
 import warnings
 import os
@@ -41,9 +51,6 @@ import tensorflow.keras.layers as tfkl
 import tensorflow_probability as tfp
 
 # for the KL-loss explosion problem
-from tensorflow.python.eager.execution_callbacks import InfOrNanError
-from tensorflow.python.eager.core import _NotOkStatusException
-
 tf.enable_eager_execution()
 # we currently handle them ourselves. but with this, it will throw an error before we can apply the fix
 tfe.seterr(inf_or_nan='raise')
@@ -51,311 +58,38 @@ tfe.seterr(inf_or_nan='raise')
 # otherwise TF will print soooo many warnings
 warnings.filterwarnings('ignore', '.*FutureWarning.*np.complexfloating.*')
 
-from som_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
-import som_vae.helpers.tensorflow as tf_helpers
+from drosoph_vae.helpers.tensorflow import _TF_DEFAULT_SESSION_CONFIG_
+import drosoph_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
-from som_vae import settings
-from som_vae import preprocessing
-from som_vae.helpers.misc import extract_args, chunks, foldl, if_last
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.settings import data as SD
-from som_vae.helpers import video, plots, misc, jupyter
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
+from drosoph_vae.settings.config import SetupConfig, RunConfig
+from drosoph_vae import data_loading
+from drosoph_vae import settings
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl, if_last
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.settings import data as SD
+from drosoph_vae.helpers import video, plots, misc, jupyter
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
 
 # <codecell>
 
 jupyter.fix_layout()
+enable_logging()
 
 # <markdowncell>
 
-# ## Constants (Settings)
+# # Setup, loading of data
 
 # <codecell>
 
-# all those experiments and data will be used
-from som_vae.settings import config
-print(f"this is the main experiment, study, and fly id: {config.full_experiment_id()}.\n\nloadable experiments. there is a blacklist below.")
-!ls $config.__EXPERIMENT_ROOT__
+setup_cfg = SetupConfig()
+run_cfg = RunConfig()
 
-# <codecell>
-
-# if you want to see the flys as well, or just more information
-# !tree -L 2 $config.__EXPERIMENT_ROOT__
-
-# <codecell>
-
-config.positional_data(SD.EXPERIMENTS[0]).shape
-
-# <codecell>
-
-_EXPERIMENT_BLACK_LIST_ = ['181220_Rpr_R57C10_GC6s_tdTom'] # all other experiments are used
-_FLY_BLACK_LIST_ = ['180920_aDN_PR-Fly2-005_SG1', '180921_aDN_CsCh-Fly6-003_SG1'] # for those flys the angle conversion give odd results,
-                                                                                  # and their distributions seem way off compared to the others)
-
-
-_DATA_TYPE_3D_ANGLE_ = '3d_angle'
-_DATA_TYPE_2D_POS_ = '2d_pos'
-_SUPPORTED_DATA_TYPES_ = [_DATA_TYPE_3D_ANGLE_, _DATA_TYPE_2D_POS_]
-
-_MODEL_IMPL_TEMPORAL_CONV_ = 'temp_conv'
-_MODEL_IMPL_PADD_CONV_ = 'padd_conv'
-_MODEL_IMPL_SKIP_CON_ = 'skip_padd_conv' 
-
-run_config = {
-    'debug': True,                 # general flag for debug mode, triggers all `d_.*`-options.
-    'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
-    'd_sinoid_data': False, 
-    'd_sinoid_cluster_data': True,
-    'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input. allowing the model to learn the identity function.
-    'use_all_experiments': False,
-    'data_type': _DATA_TYPE_3D_ANGLE_,
-    'use_time_series': True,       # triggers time series application, without this the model is only dense layers
-    'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
-    'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'n_conv_layers': None,         # you can set either this or `conv_layer_kernel_size` to None, it will be automatically computed. see section `Doc` for an explanation.
-    'latent_dim': None,               # should be adapted given the input dim
-    'batch_size': 128,
-    'loss_weight_reconstruction': 1.0, # will be adjusted further down (currently)
-    'loss_weight_kl': 0.0,             # will be adjusted further down (currently)
-    'dropout_rate': 0.,
-    'with_batch_norm': True,
-    'model_impl': _MODEL_IMPL_SKIP_CON_
-}
-
-# And now the ... ugly parts begin. -> TODO put this in a class, 
-
-if run_config['use_all_experiments']:
-    # takes way too long otherwise
-    run_config['batch_size'] = 1024
-
-if not(run_config['data_type'] in _SUPPORTED_DATA_TYPES_):
-    raise NotImplementedError(f"This data type is not supported. Must be one of either {_SUPPORTED_DATA_TYPES_}")
-    
-if run_config['n_conv_layers'] is None:
-    run_config['n_conv_layers'] = np.int(np.ceil(np.log2((run_config['time_series_length'] - 1) / (2 * (run_config['conv_layer_kernel_size'] - 1)) + 1)))
-
-if run_config['conv_layer_kernel_size'] is None:
-    raise NotImplementedError('ups')
-    
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    # goes from 15 * 2 = 30 -> 8
-    run_config['latent_dim'] = 8
-elif run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-    # goes from 18 -> 4
-    run_config['latent_dim'] = 4
-else:
-    raise ValueError(f"this data_type is not supported: {run_config['data_type']}")
-
-# <markdowncell>
-
-# ## Loading of 2d positional data
-
-# <codecell>
-
-def experiments_from_root(root=config.__EXPERIMENT_ROOT__):
-    return seq(Path(root).iterdir()).flat_map(lambda p: (c for c in p.iterdir() if c.is_dir()))\
-                                    .flat_map(lambda p: (c for c in p.iterdir() if c.is_dir()))\
-                                    .map(lambda p: reduce(lambda acc, el: ([*acc[0], acc[1].stem], acc[1].parent), range(3), ([], p)))\
-                                    .map(lambda pair: list(reversed(pair[0])))\
-                                    .map(lambda ls: SD.Experiment._make([*ls, SD._key_from_list_(ls)]))\
-                                    .to_list()
-
-# <codecell>
-
-from collections import namedtuple
-
-Data = namedtuple('Data', 'joint_positions normalisation_factors image_paths labels')
-
-# <codecell>
-
-#def load_2d_pos(include_rest_data=False, use_single_fly=True):
-#    """load_2d_pos loads the 2d-positional data
-#    
-#    Parameters
-#        include_rest_data (bool): set to true if you want to include `resting` fly behaviour as well,
-#            ignored when `use_all_experiments` == True
-#        use_single_fly (bool): if True only data from one fly, but multiple experiments are used
-#            if True then there will be no labels
-#    Returns:
-#        A `Data` object, which is a namedtuple
-#    
-#    """
-#    if use_single_fly:
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
-#        
-#        frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
-#        labels = frames_idx_with_labels['label'].apply(lambda x: x.value)
-#        if use_single_fly:
-#            frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
-#            labels = labels[frames_idx_with_labels]
-#            
-#        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
-#                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
-#                                               .to_list()
-#        
-#        if len(frames_of_interest) != len(joint_positions):
-#            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-#            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
-#        
-#    else:
-#        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
-#        labels = None
-#            
-#    if run_config['use_all_experiments']:
-#        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
-#    else:
-#        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
-#
-#        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
-#                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
-#                                               .to_list()
-#
-#        if len(frames_of_interest) != len(joint_positions):
-#            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-#            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
-#        
-#        joint_positions = joint_positions[frames_of_interest[:len(joint_positions)]]
-#        frames_idx_with_labels = frames_idx_with_labels.iloc[frames_of_interest]
-#        images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
-#            
-#    
-#    return Data(joint_positions, normalisation_factors, image_paths, labels)
-
-# <codecell>
-
-if not run_config['use_all_experiments']:
-    frames_idx_with_labels = preprocessing.get_frames_with_idx_and_labels(settings.data.LABELLED_DATA)
-    frames_of_interest = ~frames_idx_with_labels['label'].isin([settings.data._BehaviorLabel_.REST])
-
-# <codecell>
-
-# TODO form a wrapper around the used data, experiments (the ids), data, normalisation factor, images, ... a namedtuple should do the trick
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    if run_config['use_all_experiments']:
-        all_experiments = [e for e in experiments_from_root() if e.study_id not in _EXPERIMENT_BLACK_LIST_ or config.get_experiment_id(e) in _FLY_BLACK_LIST_]
-        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True)
-    else:
-        joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(settings.data.EXPERIMENTS, normalize_data=True)
-
-        images_paths_for_experiments = settings.data.EXPERIMENTS.map(lambda x: (x, config.positional_data(x)))\
-                                               .flat_map(lambda x: [(x[0], config.get_path_for_image(x[0], i)) for i in range(x[1].shape[1])])\
-                                               .to_list()
-
-        if len(frames_of_interest) != len(joint_positions):
-            warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-            frames_of_interest = np.where(frames_of_interest[:len(joint_positions)])[0]
-        
-        joint_positions = joint_positions[frames_of_interest[:len(joint_positions)]]
-        frames_idx_with_labels = frames_idx_with_labels.iloc[frames_of_interest]
-        images_paths_for_experiments =  np.array(images_paths_for_experiments)[frames_of_interest].tolist()
-
-# <markdowncell>
-
-# ## loading of angle-data
-
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and not run_config['use_all_experiments']:
-    data_angle = np.vstack(seq(settings.data.EXPERIMENTS).map(lambda x: settings.config.positional_data(x, dimensions='3d')))
-
-    #
-    # Using man-made selection (from Semigh)
-    #
-    data_angle_raw = SD.convert_3d_to_angle(data_angle)
-    warnings.warn('There is a bug here. The number of images and number of data points to NOT align.')
-    frames_of_interest = frames_of_interest[:len(data_angle_raw)]
-    
-    selected_cols = [2,7,12, 19+2, 19+4, 19+12]
-    angled_data_columns = SD.get_3d_columns_names(selected_cols)
-    # for some odd reason numpy complains with I do data_angle_raw[frames_of_interest, selected_cols]
-    #plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns);
-    
-    # But not all of this data has information in it (measured by variance),
-    # so we use a different selection
-
-    #
-    # column selection 
-    #
-    threshold = 0.
-    selected_cols = np.where(np.var(data_angle_raw, axis=0) > threshold)[0]
-    
-    angled_data_columns = SD.get_3d_columns_names(selected_cols)
-    #f = plots.plot_angle_columns(data_angle_raw[:, selected_cols][frames_of_interest], angled_data_columns)
-    #f.suptitle(f"threshold: {threshold}, {len(selected_cols)} selected");
-    #plt.subplots_adjust(top=0.97)
-
-    # TODO not so sure here, should we really normalize the data?
-    joint_positions, normalisation_factors = preprocessing.normalize(data_angle_raw[:, selected_cols][frames_of_interest])
-
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_ and run_config['use_all_experiments']:
-    all_experiments = [e for e in experiments_from_root() if (e.study_id not in _EXPERIMENT_BLACK_LIST_) and (e.key not in _FLY_BLACK_LIST_)]
-    # `per_experiment` is a shitty parameter name, the data is not normalised and return per experiment.
-    loading_kwargs = {'dimensions': '3d', 'return_with_experiment_id': True}
-    angle_data_raw = [(exp_id, SD.convert_3d_to_angle(d)) for exp_id, d in preprocessing.get_data_and_normalization(all_experiments, **loading_kwargs)]
-
-    # takes for ever to render, if you want to see this, please run it yourself
-    #plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
-
-    exp_ids, angle_data  = zip(*angle_data_raw)
-    angle_data = np.vstack(angle_data)
-    selected_cols = np.where(np.var(angle_data, axis=0) > 0.0)[0]
-    joint_positions = angle_data[:, selected_cols]
-
-# <codecell>
-
-# will generate a huge plot and take about 6min to run...
-#plots.plot_distribution_of_angle_data(angle_data_raw, run_config=run_config);
-
-# <codecell>
-
-#all_experiments = experiments_from_root()
-#print(len(all_experiments))
-#
-#pos_data = preprocessing.get_data_and_normalization(all_experiments, per_experiment=True)
-#
-#norm_pos_data, norm_pos_data_params = zip(*[preprocessing.normalize(p) for p in pos_data])
-#experiment_lengths = [len(p) for p in norm_pos_data] # for applying the right normalization factors
-#norm_pos_data = np.vstack(norm_pos_data)
-#
-#print(f"in total we have {len(all_experiments)} experiments, but only {len(experiment_lengths)} are usable right now")
-#
-#norm_pos_data_embedded = TSNE(n_components=2, random_state=42).fit_transform(norm_pos_data[:, :, :2].reshape(norm_pos_data.shape[0], -1))
-#
-##_cs = sns.color_palette(n_colors=len(seen_labels))
-##
-##fig = plt.figure(figsize=(10, 10))
-##_all_frames_ = pd.concat((training_frames, testing_frames))
-##
-##behaviour_colours = dict(zip(seen_labels, _cs))
-##
-##for l, c in behaviour_colours.items():
-##    _d = X_embedded[_all_frames_['label'] == l]
-##    # c=[c] since matplotlib asks for it
-##    plt.scatter(_d[:, 0], _d[:,1], c=[c], label=l.name, marker='.')
-##    
-##plt.legend()
-##plt.title('simple t-SNE on latent space')
-##fig.savefig(f"../neural_clustering_data/figures/{som_vae_config['ex_name']}_tsne.png")
-#
-#_cs = sns.color_palette(n_colors=len(experiment_lengths))
-#
-#
-#used_until = 0
-#for i, l in enumerate(experiment_lengths):
-#    plt.scatter(norm_pos_data_embedded[used_until:used_until+l, 0], norm_pos_data_embedded[used_until:used_until+l, 1], c=[_cs[i]])
-#    used_until += l
-
-# <codecell>
-
-joint_positions.shape
+frame_data, frame_labels, normalisation_factors = data_loading.load_labelled_data(run_config=run_cfg, setup_config=setup_cfg)
 
 # <markdowncell>
 
@@ -363,146 +97,79 @@ joint_positions.shape
 
 # <codecell>
 
-def dummy_data_complex_sine_like(length):
-    DummyBehaviour = namedtuple('DummyBehaviour', 'type amplitude fraction frequency')
-    # make sure that the fractions add up to 1.
-    # cluster id, behaviour
-    _dummy_behaviours_ = [
-        (0, ('sinoid',  1.0, 0.1, 2)),
-        (1, ('flat',    0.0, 0.2, 0)),
-        (2, ('sinoid',  1.0, 0.2, 3)),
-        (3, ('sinoid',  1.0, 0.1, 5)),
-        (4, ('flat',    1.0, 0.2, 0)),
-        (2, ('sinoid',   .5,  .2, 3)),
-    ]
-    
-    
-    cur_idx = 0
-    nb_frames = length
-
-    _new_frames_ = np.zeros(nb_frames)
-    _cluster_assignments_ = np.zeros(nb_frames)
-
-    for l, db in _dummy_behaviours_:
-        db = DummyBehaviour(*db)
-        cur_idx_end = np.int(nb_frames * db.fraction + cur_idx)
-        idx = np.s_[cur_idx:cur_idx_end]
-        if db.type == 'sinoid':
-            _new_frames_[idx] = db.amplitude * np.sin(np.pi * np.linspace(0, 2, cur_idx_end - cur_idx) * db.frequency)
-        elif db.type == 'flat':
-            _new_frames_[idx] = db.amplitude
-            
-        _cluster_assignments_[idx] = l
-
-        cur_idx = cur_idx_end
-        
-    return _new_frames_, _cluster_assignments_
+def to_int_value(frame_with_label):
+    return np.array([l.label.value for l in frame_with_label[:,1]])
 
 # <codecell>
 
-reload(misc)
+if run_cfg['data_type'] == config.DataType.ANGLE_3D:
+    frame_data, frame_labels, selected_columns, normalisation_factors = preprocessing.preprocess_angle_3d_data(
+        frame_data, frame_labels, **run_cfg.value('angle_3d_params', 'preprocessing'))
+if run_cfg['data_type'] == config.DataType.POS_2D:
+    selected_columns = None
+    frame_data, frame_labels = preprocessing.preprocess_pos_2d_data(frame_data, frame_labels)
 
 # <codecell>
 
-# full preprocessing pipeline
-
-# scaling the data to be in [0, 1]
-# this is due to the sigmoid activation function in the reconstruction (and because ANN train better with normalised data) (which it is not...)
-#scaler = MinMaxScaler()
 scaler = StandardScaler()
 
-#
-# reshapping the data 
-#
+n_train_data_points = int(frame_data.shape[0] * run_cfg['train_test_ratio'])
 
-# TODO bring this in order! (or in better order)
+X_train = scaler.fit_transform(frame_data[:n_train_data_points])
+X_test = scaler.transform(frame_data[n_train_data_points:])
+y_train = to_int_value(frame_labels[:n_train_data_points])
+y_test = to_int_value(frame_labels[n_train_data_points:])
+frame_labels_train = frame_labels[:n_train_data_points]
+frame_labels_test = frame_labels[n_train_data_points:]
 
-if run_config['use_time_series']:
-    # it's the shitty logical combination of these values
-    # TODO the scaling should be learned on the training data only, but this is a bit tricky due to how we do the time-sequences
-    # TODO right now the training and testing data are just concatenated time-sequences, experiment overlapping. which is bad.
-    warnings.warn('this is not proper, fix the bugs here')
-    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        reshaped_joint_position = scaler.fit_transform(misc.prep_2d_pos_data(joint_positions))
-    else:
-        reshaped_joint_position = scaler.fit_transform(joint_positions)
-        
-    reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
-else:
-    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        # angle data is already flat
-        reshaped_joint_position = misc.prep_2d_pos_data(joint_positions)
-    else:
-        reshaped_joint_position = joint_positions
+if run_cfg['use_time_series']:
+    X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test = [misc.to_time_series_np(x, sequence_length=run_cfg['time_series_length']) 
+                                        for x in (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)]
 
-#
-# debugging overwrite
-#
-    
-if run_config['debug']:
-    if run_config['d_zero_data']:
-        # resetting the scaler to make our life easier down below the pipeline
-        _dummy_data_ = np.zeros_like(joint_positions)
-    elif run_config['d_sinoid_data']:
-        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-            _dummy_data_ = np.zeros_like(joint_positions)
-            for frame in range(_dummy_data_.shape[0]):
-                for joint in range(_dummy_data_.shape[1]):
-                    _dummy_data_[frame, joint, :] = np.sin(2 * np.pi * frame/_dummy_data_.shape[0] + joint / _dummy_data_.shape[1])
-                
-        else:
-            _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
-                                      for x in range(len(joint_positions))] 
-                                     for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
-    elif run_config['d_sinoid_cluster_data']:
-        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-            raise NotImplementedError
-        else:
-            _dummy_data_ = np.zeros_like(joint_positions)
-            _dummy_labels_ = np.zeros(joint_positions.shape[0])
-            for c in range(_dummy_data_.shape[1]):
-                _dummy_data_[:, c], _dummy_labels_ = dummy_data_complex_sine_like(_dummy_data_.shape[0])
-            
-    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        _dummy_data_ = misc.prep_2d_pos_data(_dummy_data_)
-        
-    if run_config['use_time_series']:
-        reshaped_joint_position = scaler.fit_transform(_dummy_data_)
-        reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
-        labels = _dummy_labels_[run_config['time_series_length'] - 1:]
-    else:
-        reshaped_joint_position = _dummy_data_
-        labels = _dummy_labels_
+# <codecell>
 
-#
-# split and apply scaler
-#
+##
+## debugging overwrite
+##
+#    
+#if run_config['debug']:
+#    if run_config['d_zero_data']:
+#        # resetting the scaler to make our life easier down below the pipeline
+#        _dummy_data_ = np.zeros_like(joint_positions)
+#    elif run_config['d_sinoid_data']:
+#        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+#            _dummy_data_ = np.zeros_like(joint_positions)
+#            for frame in range(_dummy_data_.shape[0]):
+#                for joint in range(_dummy_data_.shape[1]):
+#                    _dummy_data_[frame, joint, :] = np.sin(2 * np.pi * frame/_dummy_data_.shape[0] + joint / _dummy_data_.shape[1])
+#                
+#        else:
+#            _dummy_data_ = np.array([[np.sin(x) + (offset / joint_positions.shape[1]) 
+#                                      for x in range(len(joint_positions))] 
+#                                     for offset in range(joint_positions.shape[1])]).T.astype(joint_positions.dtype)
+#    elif run_config['d_sinoid_cluster_data']:
+#        if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+#            raise NotImplementedError
+#        else:
+#            _dummy_data_ = np.zeros_like(joint_positions)
+#            _dummy_labels_ = np.zeros(joint_positions.shape[0])
+#            for c in range(_dummy_data_.shape[1]):
+#                _dummy_data_[:, c], _dummy_labels_ = dummy_data_complex_sine_like(_dummy_data_.shape[0])
+#            
+#    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
+#        _dummy_data_ = misc.prep_2d_pos_data(_dummy_data_)
+#        
+#    if run_config['use_time_series']:
+#        reshaped_joint_position = scaler.fit_transform(_dummy_data_)
+#        reshaped_joint_position = misc.to_time_series_np(reshaped_joint_position, sequence_length=run_config['time_series_length'])
+#        labels = _dummy_labels_[run_config['time_series_length'] - 1:]
+#    else:
+#        reshaped_joint_position = _dummy_data_
+#        labels = _dummy_labels_
 
-if reshaped_joint_position.shape[0] > 10**5:
-    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.9)
-else:
-    n_of_data_points = int(reshaped_joint_position.shape[0] * 0.7)
+# <codecell>
 
-if run_config['use_time_series']:
-    data_train = reshaped_joint_position[:n_of_data_points]
-    data_test = reshaped_joint_position[n_of_data_points:]
-    labels_train = labels[:n_of_data_points]
-    labels_test = labels[n_of_data_points:]
-    print('train')
-    display.display(pd.DataFrame(data_train[:, -1, :]).describe())
-    print('test')
-    display.display(pd.DataFrame(data_test[:, -1, :]).describe())
-else:
-    data_train = scaler.fit_transform(reshaped_joint_position[:n_of_data_points])
-    data_test = scaler.transform(reshaped_joint_position[n_of_data_points:])
-    labels_train = labels[:n_of_data_points]
-    labels_test = labels[n_of_data_points:]
-    print('train')
-    display.display(pd.DataFrame(data_train).describe())
-    print('test')
-    display.display(pd.DataFrame(data_test).describe())
-    
-print(f"shapes for train/test: {data_train.shape}, {data_test.shape}")
+run_cfg.description(short=True)
 
 # <codecell>
 
@@ -510,30 +177,14 @@ reload(plots)
 #
 # Making sure that the train/test distributions are not too different from each other
 #
-if run_config['use_time_series']:
-    _plt_data_idx_ = np.s_[:, -1, :]
-else:
-    _plt_data_idx_ = np.s_[:]
     
-if run_config['data_type'] == _DATA_TYPE_3D_ANGLE_:
-    fig = plots.plot_3d_angle_data_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], selected_cols, exp_desc=config.config_description(run_config))
-else:
-    fig = plots.plot_2d_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], exp_desc=config.config_description(run_config))
-
-# <markdowncell>
-
-# ## Use *tf.data* to create batches and shuffle the dataset
-
-# <codecell>
-
-def to_tf_data(X, y=None):
-    if y is None:
-        return tf.data.Dataset.from_tensor_slices(X).shuffle(len(X)).batch(run_config['batch_size'])
-    else:
-        return tf.data.Dataset.from_tensor_slices((X, y)).shuffle(len(X)).batch(run_config['batch_size'])
-
-train_dataset = to_tf_data(data_train)
-test_dataset = to_tf_data(data_test) 
+#if run_cfg['data_type'] == data_loading.DataType.ANGLE_3D:
+#    fig = plots.plot_3d_angle_data_distribution(X_train[_plt_data_idx_],
+#                                                X_test[_plt_data_idx_],
+#                                                selected_columns, 
+#                                                exp_desc=run_cfg.description())
+#else:
+#    fig = plots.plot_2d_distribution(data_train[_plt_data_idx_], data_test[_plt_data_idx_], exp_desc=run_config.description())
 
 # <markdowncell>
 
@@ -602,1159 +253,538 @@ plt.legend()
 
 # <markdowncell>
 
-# ## code
-
-# <codecell>
-
-class TemporalBlock(tfkl.Layer):
-    def __init__(self, filter_size, kernel_size, dilation_rate, dropout=0.2, trainable=True, name=None, dtype=None, activity_regularizer=None, **kwargs):
-        """
-        In the dilated convolution, the kernel only touches the signal at every lth entry 
-        See https://www.inference.vc/dilated-convolutions-and-kronecker-factorisation/ (some bugs fixed and code adapted to our use case)
-        """
-        super(TemporalBlock, self).__init__(
-            trainable=trainable, dtype=dtype,
-            activity_regularizer=activity_regularizer,
-            name=name, **kwargs)        
-        self.dropout = dropout
-        self.filter_size = filter_size
-        causal_conv_args = {"padding": "causal",
-                            "dilation_rate": dilation_rate, 
-                            "activation": tf.nn.leaky_relu}
-        self.conv1 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv1")
-        self.conv2 = tfkl.Conv1D(filter_size, kernel_size, **causal_conv_args, name="conv2")
-        self.down_sample = None
-
-    
-    def build(self, input_shape):
-        channel_dim = -1
-        # SpatialDropout1D proved to be much better. Original paper: https://arxiv.org/abs/1411.4280
-        self.dropout1 = tfkl.SpatialDropout1D(self.dropout)
-        self.dropout2 = tfkl.SpatialDropout1D(self.dropout)
-        if input_shape[channel_dim] != self.filter_size:
-            # TODO why not a conv1d layer?
-            # self.down_sample = tf.layers.Conv1D(
-            #     self.filter_size, kernel_size=1, 
-            #     activation=None, data_format="channels_last", padding="valid")
-            self.down_sample = tfkl.Dense(self.filter_size, activation=None)
-        self.built = True
-    
-    def call(self, inputs, training=True):
-        x = self.conv1(inputs)
-        x = self.dropout1(x, training=training)
-        x = self.conv2(x)
-        x = self.dropout2(x, training=training)
-        if self.down_sample is not None:
-            inputs = self.down_sample(inputs)
-        return tf.nn.relu(x + inputs)
-
-# <codecell>
-
-def make_inference_net(model_to_wrap, input_shape, batch_size, activation=tf.nn.softplus):
-    """This is basically a wrapper function. Define your model up to the split into μ and σ.
-    Which is what this function will do.
-    
-    Depending on your interpretation of how a VAE should do it (depends mostly on your reparametrisation trick),
-    you can provide an activation function.
-    
-    E.g. if you think σ should be the variance use `tf.nn.softplus` to force it to be positive.
-    if you think it should be the deviation, then provide `None`.
-    """
-    
-    x = tfk.Input(shape=input_shape, batch_size=batch_size)
-    enc = model_to_wrap(x)
-    mean, var = tf.split(enc, num_or_size_splits=2, axis=-1)
-    
-    if activation is not None:
-        var = tfkl.Activation(activation)(var)
-    
-    return tfk.Model(x, [mean, var])
-
-# <codecell>
-
-# DrosophVAE base class
-# build using:
-#   - https://github.com/tensorflow/tensorflow/blob/r1.13/tensorflow/contrib/eager/python/examples/generative_examples/cvae.ipynb 
-#   - https://www.kaggle.com/hone5com/fraud-detection-with-variational-autoencoder
-
-def dense_layers(sizes, activation_fn=tf.nn.leaky_relu, name_prefix=None):
-    # no activation in the last layer
-    # both models inference and generative should be free (super important for the decoder)
-    # the encoder could be fixed, but we want the "mean" to be represent any value, 
-    # a SoftPlus activation is applied to the "variance" in the `DrosophVAE.encode` method.
-    return [tfkl.Dense(size, activation=None if is_last else activation_fn, name=f"{name_prefix}_dense_{idx}") for idx, is_last, size in if_last(sizes)]
-
-def temporal_layers(filter_sizes, kernel_size=2, dropout=0.2):
-    return [TemporalBlock(filter_size, kernel_size, dilation_rate=2 ** i, dropout=dropout, name=f"temporal_block_{i}") for i, filter_size in enumerate(filter_sizes)]
-
-class DrosophVAE(tfk.Model):
-    def __init__(self, latent_dim, input_shape, batch_size, 
-                 n_layers=3, dropout_rate_temporal=0.2, 
-                 loss_weight_reconstruction=1.0, loss_weight_kl=1.0, 
-                 filters_conv_layer=None, conv_layer_kernel_size=2,
-                 use_wavenet_temporal_layer=True):
-        """
-        Args:
-        -----
-        
-        latent_dim              int, dimension of latent space
-        input_shape             tuple, total input shape is: [batch_size, *input_shape]
-        batch_size              int
-        n_layers                int, number of dense layers. 
-                                output shape of the dense layers is linearly scaled.
-        dropout_rate_temporal   float, in [0, 1). dropout rate for temporal blocks (conv layers).
-        filters_conv_layer      list[int]. filter sizes for conv layers
-        """
-        super(DrosophVAE, self).__init__()
-        self.latent_dim = latent_dim
-        self._input_shape = input_shape
-        self._batch_size = batch_size
-        self._loss_weight_reconstruction = loss_weight_reconstruction
-        self._loss_weight_kl = loss_weight_kl
-        self._layer_sizes_inference  = np.linspace(input_shape[-1], 2 * latent_dim, n_layers).astype(np.int)
-        # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
-        # the 2 * n_layers is to keep compression speed roughly the same
-        self._layer_sizes_generative = np.linspace(latent_dim, input_shape[-1], 2 * n_layers).astype(np.int).tolist()
-        self._conv_layer_kernel_size = conv_layer_kernel_size
-        
-        if use_wavenet_temporal_layer:
-            # Remember that we do diluted convolutions -> The filter size can stay ~ constant. TODO discuss with Semigh
-            if filters_conv_layer is None:
-                # TODO this is probably not correct
-                self.filters_conv_layer = [input_shape[-1]] * 3
-            else:
-                self.filters_conv_layer = filters_conv_layer
-                
-            self.temporal_conv_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_temporal_conv_net'),
-                                                     *temporal_layers(kernel_size=self._conv_layer_kernel_size, 
-                                                                      filter_sizes=self.filters_conv_layer,  
-                                                                      dropout=dropout_rate_temporal)],
-                                                     name='temporal_conv_net')
-            
-            inference_input_shape = input_shape
-            generative_input_shape = list(input_shape[:1]) + [latent_dim]
-        else:
-            self.temporal_conv_net = None
-            inference_input_shape = input_shape[-1]
-            generative_input_shape = (latent_dim, )
-            
-        self.inference_net = make_inference_net(tfk.Sequential([tfkl.InputLayer(input_shape=inference_input_shape, name='input_inference_net'),
-                                                 *dense_layers(self._layer_sizes_inference, name_prefix='inf')],
-                                                 name='inference_net'), inference_input_shape, batch_size)
-            
-        self.generative_net = tfk.Sequential([tfkl.InputLayer(input_shape=generative_input_shape, name='input_generative_net'),
-                                                  *dense_layers(self._layer_sizes_generative, name_prefix='gen')],
-                                                  name='generative_net')
-    
-    def sample(self, eps=None):
-        if eps is None:
-            if self._loss_weight_kl == 0.0:
-                warnings.warn('KL loss is 0.0. The latent space is not properly trained')
-            # The KL-loss is calculated against a normal distribution, 
-            # thus it should resemble one and thus sampling should make sense.
-            #eps = tf.random_normal(shape=(self._batch_size, self.latent_dim))
-            eps = tf.random_normal(shape=[self._batch_size] + list(self.generative_net.input_shape[1:]))
-        return self.decode(eps, apply_sigmoid=False)
-    
-    def encode(self, x, training=False):
-        if self.temporal_conv_net:
-            # TODO combine them into one? max pooling or something
-            #x_tmp = tfkl.Lambda(lambda x: x[:, -1, :])(self.temporal_conv_net(x, training=training))
-            mean, var = self.inference_net(self.temporal_conv_net(x, training=training))
-            #mean, var = tf.split(self.inference_net(self.temporal_conv_net(x, training=training)), 
-            #                        num_or_size_splits=2,
-            #                        axis=-1)
-        else:
-            mean, var = self.inference_net(x, training=training)
-            #mean, var = tf.split(self.inference_net(x),
-            #                        num_or_size_splits=2,
-            #                        axis=1)
-            
-        # the variance should be in [0, inf)
-        return mean, var
-  
-    def reparameterize(self, mean, var):
-        # TODO check: the params should be correct? check original paper
-        eps = tf.random_normal(shape=mean.shape)
-        #return eps * tf.exp(logvar * .5) + mean
-        # this is the truest form to the original paper https://arxiv.org/pdf/1312.6114v10.pdf
-        return eps * var + mean
-  
-    def decode(self, z, apply_sigmoid=False):
-        logits = self.generative_net(z)
-        if apply_sigmoid:
-            probs = tf.sigmoid(logits)
-            return probs
-  
-        return logits
-
-    def predict(self, x):
-        # https://github.com/LynnHo/VAE-Tensorflow/blob/master/train.py
-        # epsilon = tf.random_normal(tf.shape(z_mu))
-        # if is_training:
-        #     z = z_mu + tf.exp(0.5 * z_log_sigma_sq) * epsilon
-        # else:
-        #     z = z_mu
-        mean, logvar = self.encode(x)
-        z = model.reparameterize(mean, logvar)
-        return model.decode(z, apply_sigmoid=True)
-    
-    def call(self, x, training=False, apply_sigmoid=False):
-        return self.decode(self.reparameterize(*self.encode(x, training=training)), 
-                           apply_sigmoid=apply_sigmoid)
-    
-    def _config_(self):
-        return {
-            "latent_dim": self.latent_dim,
-            "input_shape": self._input_shape,
-            "batch_size": self._batch_size,
-            "layer_sizes_inference": self._layer_sizes_inference,
-            "layer_sizes_generative": self._layer_sizes_generative,
-            "loss_weight_reconstruction": self._loss_weight_reconstruction,
-            "loss_weight_kl": self._loss_weight_kl,
-            "model_impl": self._name
-        }
-
-# <codecell>
-
-class TemporalUpsamplingConv(tfkl.Layer):
-    """
-    This layer requires good fine tuning of parameters. Use PaddedConv1dTransposed if you want an easier layer.
-    
-    For a general nice description of convolutions:
-        https://arxiv.org/pdf/1603.07285.pdf
-        
-        A guide to convolution arithmetic for deeplearning
-        Vincent Dumoulin and Francesco Visin
-    
-    For the artifacts:
-        Conditional generative adversarial nets for convolutional face generation
-        J. Gauthier.
-        Class Project for Stanford CS231N: Convolutional Neural Networks for Visual Recognition, Winter semester, Vol 2014. 2014. 
-        http://www.foldl.me/uploads/papers/tr-cgans.pdf
-    """
-    def __init__(self, conv_n_filters, upsampling_size=3, conv_kernel_size=2, conv_padding='valid', conv_strides=2, name=None):
-        super(TemporalUpsamplingConv, self).__init__(name=name)
-        
-        if conv_kernel_size % conv_strides != 0:
-            warnings.warn(f"Using a kernel size not divisable by the stride will lead to artifacts.:"
-                          f" Given kernel_size: {conv_kernel_size}"
-                          f" stride: {conv_strides}")
-        
-        self.upsampling_size = upsampling_size
-        self.conv_n_filters = conv_n_filters
-        self.conv_kernel_size = conv_kernel_size
-        self.conv_padding = conv_padding
-        self.conv_strides = conv_strides
-        
-        # upscale with 3 so that we can again apply `valid` padding and "reverse" the encoder
-        self.upsampling = tfkl.UpSampling1D(size=self.upsampling_size,
-                                            name=f"{name}_upsampling")
-        # TODO maybe add some fancy flipping of the input, right now it cuts again from the "start", ideally it should append there...
-        self.conv = tfkl.Conv1D(filters=self.conv_n_filters, 
-                                kernel_size=self.conv_kernel_size, 
-                                padding=self.conv_padding, 
-                                strides=self.conv_strides,
-                                name=f"{name}_conv")
-    
-    def call(self, x): 
-        return self.conv(self.upsampling(x))
-
-# <codecell>
-
-class PaddedConv1dTransposed(tfkl.Layer):
-    """ The most inefficient transpose version. The focus is to get a roughly equal decompression speed.
-    
-    Build on https://arxiv.org/pdf/1603.07285.pdf relationship 8, page 22
-    
-    Note that this will almost certainly lead to artifacts as the receptive fields overlap. 
-    But... as we don't really care about it... (at least for now).
-    
-    See also https://distill.pub/2016/deconv-checkerboard/
-    """
-    def __init__(self, n_filters, kernel_size=2, name=None, activation=tf.nn.leaky_relu, batch_norm=False, padding=None):
-        """
-        Do NOT set the padding by yourself, the input will be padded in a causal way. If you set padding, this padding will be applied.
-        """
-        
-        if batch_norm:
-            name += '_bn'
-        super(PaddedConv1dTransposed, self).__init__(name=name)
-        
-        if padding is None:
-            padding = 'valid'
-            self._padding_overwrite_ = False
-        else:
-            self._padding_overwrite_ = True
-        
-        self.n_filters = n_filters
-        self.kernel_size = kernel_size
-        
-        self.padding = [[0, 0], [1, 1], [0, 0]] # adds only a zero at the end of the time-dimension
-        self.conv = tfkl.Conv1D(filters=self.n_filters, kernel_size=self.kernel_size, activation=activation, padding=padding)
-        
-        if batch_norm:
-            self.batch_norm = tfkl.BatchNormalization()
-        else:
-            self.batch_norm = None
-    
-    def call(self, x): 
-        if not self._padding_overwrite_:
-            x = tf.pad(x, self.padding)
-        x = self.conv(x)
-        
-        if self.batch_norm:
-            x = self.batch_norm(x)
-        
-        return x
-
-# <codecell>
-
-class DrosophVAEConv(DrosophVAE):
-    """
-    About the Deconvolution: https://datascience.stackexchange.com/questions/6107/what-are-deconvolutional-layers
-    """
-    def __init__(self, latent_dim, input_shape, batch_size, n_start_filters=None, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0, with_batch_norm=False):
-        """
-        Args:
-        -----
-        
-        latent_dim              int, dimension of latent space
-        input_shape             tuple, total input shape is: [batch_size, *input_shape]
-        batch_size              int
-        n_layers                int, number of dense layers. 
-                                output shape of the dense layers is linearly scaled.
-        dropout_rate_temporal   float, in [0, 1). dropout rate for temporal blocks (conv layers).
-        filters_conv_layer      list[int]. filter sizes for conv layers
-        """
-        # just a dummy init, we are only interested in defining the two nets.
-        super(DrosophVAEConv, self).__init__(
-            latent_dim=latent_dim,
-            input_shape=input_shape,
-            batch_size=batch_size,
-            loss_weight_reconstruction=loss_weight_reconstruction,
-            loss_weight_kl=loss_weight_kl,
-            use_wavenet_temporal_layer=False,
-            n_layers=1)
-        
-        if n_start_filters is None:
-            n_start_filters = input_shape[-1]
-            
-        self.latent_dim = latent_dim
-        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=input_shape[-2] -1, dtype=np.int)
-        # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
-        # the 2 * n_layers is to keep compression speed roughly the same
-        
-        # since the layers grow only one time-step per layer:
-        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
-        
-        # TODO add MaxPooling
-        self.inference_net = tfk.Sequential([tfkl.InputLayer(input_shape=input_shape, name='input_inference_net'),
-                                                  *[self._convolutional_layer_(idx=i,
-                                                                               filters=fs,
-                                                                               kernel_size=2,
-                                                                               padding='valid',
-                                                                               name=f"inf_{i}",
-                                                                               activation=tf.nn.leaky_relu) 
-                                                    for i, fs in enumerate(self._layer_sizes_inference)],
-                                                  tfkl.Flatten(),
-                                                  tfkl.Dense(2 * self.latent_dim)],
-                                                 name='inference_net')
-        # This does not work...
-        #self.generative_net = tf.keras.Sequential([tfkl.InputLayer(input_shape=(latent_dim,)),
-        #                                           tfkl.Lambda(lambda x: tf.reshape(x, [batch_size, 1, latent_dim]), name='gen_reshaping'),
-        #                                           *[UpsamplingConv(n_filters=fs, name=f"gen_conv_{i}") for i, fs in enumerate(self._layer_sizes_generative)],
-        #                                           tfkl.Dense(input_shape[-1])],
-        #                                          name='generative_net')
-        
-        self.generative_net = tfk.Sequential([tfkl.InputLayer(input_shape=(self.latent_dim,), name='input_generative_net'),
-                                              tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, self.latent_dim])),
-                                              *[PaddedConv1dTransposed(n_filters=fs, batch_norm=with_batch_norm, name=f"gen_{i}") for i, fs
-                                                in enumerate(self._layer_sizes_generative)],
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=tf.nn.leaky_relu, name=f"gen_dense_0")), 
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=tf.nn.leaky_relu, name=f"gen_dense_1")), 
-                                              tfkl.TimeDistributed(tfkl.Dense(input_shape[-1], activation=None, name=f"gen_dense_2"))], 
-                                                  name='generative_net')
-        
-    def _convolutional_layer_(self, idx, **kwargs):
-        return tfk.Sequential([tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_0"}), 
-                               tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_1", 'padding': 'same'}), 
-                                tfkl.BatchNormalization(name=f"conv_block_{idx}_batch_norm")], 
-                              name=f"conv_block_{idx}")
-
-# <codecell>
-
-class DrosophVAESkipConv(DrosophVAE):
-    """
-    About the Deconvolution: https://datascience.stackexchange.com/questions/6107/what-are-deconvolutional-layers
-    
-    Based on https://arxiv.org/pdf/1807.04863.pdf to avoid latent space collapse
-
-    """
-    def __init__(self, latent_dim, input_shape, batch_size, 
-                 n_conv_layers=None, n_start_filters=None, dropout_rate_temporal=0.2, loss_weight_reconstruction=1.0, loss_weight_kl=1.0):
-        """
-        Args:
-        -----
-        
-        latent_dim              int, dimension of latent space
-        input_shape             tuple, total input shape is: [batch_size, *input_shape]
-        batch_size              int
-        n_layers                int, number of dense layers. 
-                                output shape of the dense layers is linearly scaled.
-        dropout_rate_temporal   float, in [0, 1). dropout rate for temporal blocks (conv layers).
-        filters_conv_layer      list[int]. filter sizes for conv layers
-        """
-        # just a dummy init, we are only interested in defining the two nets.
-        super(DrosophVAESkipConv, self).__init__(
-            latent_dim=latent_dim,
-            input_shape=input_shape,
-            batch_size=batch_size,
-            loss_weight_reconstruction=loss_weight_reconstruction,
-            loss_weight_kl=loss_weight_kl,
-            use_wavenet_temporal_layer=False,
-            n_layers=1,
-        )
-        
-        if n_start_filters is None:
-            n_start_filters = input_shape[-1]
-            
-        if n_conv_layers is None:
-            n_conv_layers = np.int(np.ceil((n_start_filters - latent_dim) / 2 + 1))
-            
-        self.latent_dim = latent_dim
-        self._layer_sizes_inference  = np.linspace(n_start_filters, 2 * latent_dim, num=input_shape[-2] -1, dtype=np.int)
-        # pseudo reverse as the inference network goes down to double the latent space, ask Semigh about this
-        # the 2 * n_layers is to keep compression speed roughly the same
-        
-        # since the layers grow only one time-step per layer:
-        self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
-        
-        print(self._layer_sizes_inference)
-        print(self._layer_sizes_generative)
-    
-        # TODO add MaxPooling
-        self.inference_net = make_inference_net(tfk.Sequential([*[_convolutional_layer_(idx=i,
-                                                                  filters=fs,
-                                                                  kernel_size=2,
-                                                                  padding='valid',
-                                                                  name=f"inf_{i}",
-                                                                  activation=tf.nn.leaky_relu) 
-                                            for i, fs in enumerate(self._layer_sizes_inference)],
-                                          tfkl.Flatten(),
-                                          tfkl.Dense(2 * self.latent_dim)],
-                                         name='inference_net'), input_shape, batch_size)
-        
-        self.generative_net = _skip_connection_model_(input_shape=self.latent_dim, 
-                                                      layer_sizes=self._layer_sizes_generative,
-                                                      output_dim=input_shape[-1],
-                                                      name='generative_net')
-        
-        
-def _convolutional_layer_(idx, **kwargs):
-    return tfk.Sequential([tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_0"}), 
-                           tfkl.Conv1D(**{**kwargs, 'name': f"{kwargs['name']}_block_{idx}_conv_1", 'padding': 'same'}), 
-                            tfkl.BatchNormalization(name=f"conv_block_{idx}_batch_norm")], 
-                          name=f"conv_block_{idx}")
-
-class SkipConnectionLayer(tfkl.Layer):
-    """
-    Taken from https://arxiv.org/pdf/1512.03385.pdf, Deep Residual Learning for Image Recognition
-    
-    The batch normalisation prior to a convolution and before activation follows:
-    S. Ioffe and C. Szegedy. Batch normalization:  Accelerating deepnetwork training by reducing internal covariate shift. InICML, 2015.
-        
-    This class only exists because I can't read too much output. Tensorflow, yeah! (or not)
-    
-    Roughtly equivalent (as it was this some time ago) "functional"-style:
-    x = tfkl.BatchNormalization()(x)
-    x = PaddedConv1dTransposed(n_filters=fs, activation=None, batch_norm=False)(x)
-    x_skip = tf.reshape(tfkl.Dense(fs, activation=None)(input_layer), [-1, 1, x.shape[-1]])
-    x = x + x_skip
-    x = tfkl.BatchNormalization()(x)
-    x = tfkl.Activation(tf.nn.leaky_relu)(x)
-    """
-    def __init__(self, n_filters_weight_layer, activation=tf.nn.leaky_relu, name=None):
-        super(SkipConnectionLayer, self).__init__(name=name)
-        self.bn_in = tfkl.BatchNormalization()
-        self.weight_layer_0 = PaddedConv1dTransposed(n_filters=n_filters_weight_layer, activation=None, batch_norm=False)
-        self.act_0 = tfkl.Activation(activation)
-        self.weight_layer_1 = PaddedConv1dTransposed(n_filters=n_filters_weight_layer, activation=None, batch_norm=False, padding='same')
-                                          
-        self.bn_sk = tfkl.BatchNormalization()
-        self.identity_layer = tfkl.Dense(n_filters_weight_layer, activation=None)
-        self.reshape_layer = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, n_filters_weight_layer]))
-        self.act_1 = tfkl.Activation(activation)
-        
-    def call(self, x_and_skipped):
-        x, x_skipped = x_and_skipped
-        x = self.bn_in(x)
-        x_skipped = self.bn_sk(x_skipped) # This is from another paper, which I forgot to bookmark, seemed sensible
-        x_skipped = self.identity_layer(x_skipped)
-        
-        x = self.weight_layer_0(x)
-        x = self.act_0(x)
-        
-        x = self.weight_layer_1(x)
-        
-        x = x + self.reshape_layer(x_skipped)
-        
-        x = self.act_1(x)
-        
-        return x
-    
-        
-def _skip_connection_model_(input_shape, layer_sizes, output_dim, name):
-    """
-    """
-    input_layer = tfkl.Input(shape=(input_shape,))
-    x = tfkl.Lambda(lambda x: tf.reshape(x, [-1, 1, input_shape]))(input_layer)
-
-    for i, fs in enumerate(layer_sizes):
-        x = SkipConnectionLayer(fs)([x, input_layer])
-        
-    x = tfkl.TimeDistributed(tfkl.Dense(output_dim, activation=None))(x)
-
-    return tfk.Model(inputs=[input_layer], outputs=[x])
-
-# <codecell>
-
-if run_config['use_time_series']:
-    assert len(data_train.shape) == 3, 'run all the necessary code, shape does not align with config'
-else:
-    assert len(data_train.shape) == 2, 'run all the necessary code, shape does not align with config'
-
-# <codecell>
-
-data_test.shape
-
-# <codecell>
-
-# LOSS FUNCTION
-#
-# https://github.com/pytorch/examples/issues/399
-#   Argues that since we are using a normal distribution we should not use any activation function in the last layer
-#   and the loss should be MSE.
-# https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder?rq=1
-#   Some general discussion about KL vs recon-loss
-# https://stats.stackexchange.com/questions/368001/is-the-output-of-a-variational-autoencoder-meant-to-be-a-distribution-that-can-b
-
-def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
-    """
-    Args:
-    
-        model          the model
-        x              the data
-        detailed       set to true if you want the separate losses to be returned as well, basically a debug mode
-        kl_nan_offset  the kicker, can lead to NaN errors otherwise (don't ask me how long it took to find this)
-                       value was found empirically 
-    """
-    mean, var = model.encode(x)
-    z = model.reparameterize(mean, var)
-    x_logit = model.decode(z)
-    
-    #if run_config['use_time_series']:
-    #    # Note, the model is trained to reconstruct only the last, most current time step (by taking the last entry in the timeseries)
-    #    # this works on classification data (or binary data)
-    #    #cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(logits=x_logit, labels=x[:, -1, :])
-    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x[:, -1, :])
-    #else:
-    #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
-    
-    # Putting more weight on the most current time epochs
-    recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
-                                          labels=x, 
-                                          weights=np.exp(np.linspace(0, 1, num=run_config['time_series_length']))\
-                                                    .reshape((1, run_config['time_series_length'], 1)))
-    
-    # Checkout https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
-    # https://arxiv.org/pdf/1606.00704.pdf
-    #  Adversarially Learned Inference
-    #  Vincent Dumoulin, Ishmael Belghazi, Ben Poole, Olivier Mastropietro1,Alex Lamb1,Martin Arjovsky3Aaron Courville1
-    
-    # This small constant offset prevents Nan errors
-    p = tfp.distributions.Normal(loc=tf.zeros_like(mean) + tf.constant(kl_nan_offset), scale=tf.ones_like(var) + tf.constant(kl_nan_offset))
-    q = tfp.distributions.Normal(loc=mean + tf.constant(kl_nan_offset), scale=var + tf.constant(kl_nan_offset))
-    try:
-        # the KL loss can explode easily, this is to prevent overflow errors
-        kl = tf.reduce_mean(tf.clip_by_value(tfp.distributions.kl_divergence(p, q, allow_nan_stats=True), 0., 1e32))
-    except (_NotOkStatusException, InfOrNanError) as e:
-        print('Error with KL-loss: ', e, tf.reduce_mean(var))
-        kl = 1.
-    
-    if not detailed:
-        kl = tf.clip_by_value(kl, 0., 1.)
-    
-    if model._loss_weight_kl == 0.:
-        loss = model._loss_weight_reconstruction*recon_loss 
-    else:
-        # KL loss can be NaN for some data. This is inherit to KL-loss (but the data is probably more to blame)
-        loss = model._loss_weight_reconstruction*recon_loss + model._loss_weight_kl*kl
-    
-    if detailed:
-        return loss, recon_loss, kl
-    else:
-        return loss
-
-def compute_gradients(model, x): 
-    with tf.GradientTape() as tape: 
-        loss = compute_loss(model, x) 
-        return tape.gradient(loss, model.trainable_variables), loss
-
-def apply_gradients(optimizer, gradients, variables, global_step=None):
-    # TODO try out gradient clipping
-    #gradients, _ = tf.clip_by_global_norm(gradients, 5.0)
-    optimizer.apply_gradients(zip(gradients, variables), global_step=global_step)
-
-# <markdowncell>
-
 # ## training
 
 # <codecell>
 
-# This is the init cell. The model and all related objects are created here.
-if run_config['debug'] and run_config['d_no_compression']:
-    run_config['latent_dim'] = data_train.shape[-1]
+from collections import namedtuple
+from matplotlib import gridspec
+from hdbscan import HDBSCAN
+from sklearn.manifold import TSNE
+from sklearn.cluster import AgglomerativeClustering
+
+from drosoph_vae.helpers.tensorflow import to_tf_data
+from drosoph_vae.training import vae as vae_training
+from drosoph_vae.training import supervised as supervised_training
+from drosoph_vae.losses.normalized_mutual_information import normalized_mutual_information
+from drosoph_vae.losses.purity import purity
+
+LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
+
+def get_latent_space(model, X):
+    def _encode_(x):
+        if hasattr(model, 'encode'):
+            # normal model
+            return model.encode(x)
+        else:
+            # only encoder/inference net
+            return model(x)
+        
+    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy(), _encode_(X)))
+    else:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], _encode_(X)))
+    
+    
+def _reshape_and_rescale_(X, scaler=scaler, data_type=run_cfg['data_type']):
+    """To be defined in this notebook / function. Basically a larger lambda function
+    """
+    rescaled = scaler.inverse_transform(X)
+    if data_type ==  config.DataType.POS_2D:
+        return rescaled.reshape(-1, 15, 2)
+    elif data_type ==  config.DataType.ANGLE_3D:
+        return rescaled
+    else:
+        raise ValueError(f"uh, got something odd: {data_type}")
+        
+def same_experiment_same_fly(exp_0, exp_1):
+    keys_0 = experiment_key(obj=exp_0).split('-')
+    keys_1 = experiment_key(obj=exp_1).split('-')
+    return keys_0[0] == keys_1[0] and keys_0[2] == keys_1[2]
+
+# <codecell>
+
+reload(vae_training)
+reload(supervised_training)
+
+# <codecell>
+
+
+
+# <codecell>
+
+from drosoph_vae.settings.data import Experiment, experiment_key
+
+def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
+    #
+    # Unsupervised part
+    #
+    
+    model = training_results['model']
+    exp_desc = run_config.description(short=False)
+    exp_desc_short = run_config.description()
+    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time], data_type=run_config['data_type'])
+    epochs = len(training_results['train_reports'])
+    
+    if supervised:
+        exp_desc_short = 'supervised' + exp_desc_short
+
+    
+    #
+    # Reconstruction plots
+    #
+    
+    if run_config['data_type'] == config.DataType.ANGLE_3D:
+        plot_recon_path = plots.plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
+                                                                         epochs=epochs, 
+                                                                         selected_columns=selected_columns,
+                                                                         run_desc=exp_desc_short)
+    else:
+        plot_recon_path = plots.plot_reconstruction_comparision_pos_2d(X_eval, X_hat_eval, 
+                                                                 epochs=epochs, 
+                                                                 run_desc=exp_desc_short)
+        
+    #
+    # Latent plot
+    #
+
+    X_latent = get_latent_space(training_results['model'], X)
+    X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
+
+    #cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+    # average because of the triplet loss (maybe? kinda makes sense... not?)
+    cluster_assignments = AgglomerativeClustering(n_clusters=2 * len(list(config.Behavior)), linkage='average')\
+        .fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+                                                                                      
+    plot_latent_path = plots.plot_latent_space(X_latent,
+                                         X_latent_mean_tsne_proj,
+                                         np.array([y.label.name for _, y in y_frames[back_to_single_time]]),
+                                         cluster_assignments,
+                                         exp_desc_short,
+                                         epochs=len(training_results['train_reports']))
+    
+    #
+    # Videos
+    #
+    group_videos = list(video.group_video_of_clusters(cluster_assignments,
+                                                      y_frames[back_to_single_time],
+                                                      exp_desc_short, 
+                                                      epochs=epochs))
+    
+    #nmi = normalized_mutual_information(cluster_assignments, y)
+    #pur = purity(cluster_assignments, y)
+    
+    #
+    # Single video of Hubert, the special fly
+    #
+
+    hubert = Experiment(**SetupConfig.value('hubert'))
+    hubert_idx = np.array([same_experiment_same_fly(l, hubert) for l in y_frames[back_to_single_time][:, 1]])
+
+    exp_descs = np.array([experiment_key(obj=l) for l in y_frames[back_to_single_time][:, 1]])
+
+    X_hat_eval = X_hat_eval[hubert_idx, :]
+    cluster_assignments = cluster_assignments[hubert_idx]
+    image_id_with_exp = y_frames[back_to_single_time][hubert_idx]
+    paths = [video._path_for_image_(image_id, label) for image_id, label in image_id_with_exp]
+
+    labels = [l.label.name for l in y_frames[back_to_single_time][hubert_idx, 1]]
+    
+    if run_config['data_type'] == config.DataType.POS_2D:
+        mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
+        X_hat_eval = (X_hat_eval *std_) + mean_
+
+        X_raw_input = (frame_data.reshape(-1, 15, 2) * std_) + mean_
+        X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)]
+        X_hat_eval = np.clip(X_hat_eval, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
+
+        full_video_path = video.comparision_video_of_reconstruction((X_raw_input, X_hat_eval), 
+                                                                    cluster_assignments,
+                                                                    image_id_with_exp,
+                                                                    labels,
+                                                                    n_train_data_points,
+                                                                    paths,
+                                                                    epochs=epochs,
+                                                                    run_desc=exp_desc_short)
+    else:
+        full_video_path = video.comparision_video_of_reconstruction([],
+                                                                    cluster_assignments,
+                                                                    image_id_with_exp,
+                                                                    labels,
+                                                                    n_train_data_points,
+                                                                    paths,
+                                                                    epochs=epochs,
+                                                                    run_desc=exp_desc_short)
+        
     
 
-tf.reset_default_graph()
+    return {'latent_projection': X_latent_mean_tsne_proj, 
+            'cluster_assignments': cluster_assignments,
+            'plot_paths': {'reconstruction': plot_recon_path, 'latent': plot_latent_path},
+            'video_paths': {'groups': group_videos, 'hubert': full_video_path},
+           }
 
-# This is a bit shitty... but I like to run the training loop multiple times...
-test_reports = np.array([]) 
-train_reports = np.array([]) 
-_cur_train_reports = []
-_cur_test_reports  = []
-cur_min_val_idx = 0
-run_config['loss_weight_reconstruction'] = 1.0
-run_config['loss_weight_kl'] = 0.0 # 1e-3
+# <codecell>
 
-print(f"Using model: {run_config['model_impl']}")
-      
-model_config = {'latent_dim': run_config['latent_dim'], 
-                'input_shape': data_train.shape[1:], 
-                'batch_size': run_config['batch_size'], 
-                'loss_weight_reconstruction': run_config['loss_weight_reconstruction'],
-                'loss_weight_kl': run_config['loss_weight_kl']}
-      
-if run_config['model_impl'] == _MODEL_IMPL_TEMPORAL_CONV_:
-    model = DrosophVAE(run_config['latent_dim'], 
-                       input_shape=data_train.shape[1:], 
-                       batch_size=run_config['batch_size'], 
-                       n_layers=run_config['n_conv_layers'], 
-                       dropout_rate_temporal=run_config['dropout_rate'],
-                       loss_weight_reconstruction=run_config['loss_weight_reconstruction'],
-                       loss_weight_kl=run_config['loss_weight_kl'], 
-                       use_wavenet_temporal_layer=run_config['use_time_series'])
+X = np.vstack((X_train, X_test))
+y = np.vstack((y_train, y_test))
+y_frames = np.vstack((frame_labels_train, frame_labels_test))
 
-    if run_config['use_time_series']:
-        model.temporal_conv_net.summary()
-elif run_config['model_impl'] == _MODEL_IMPL_PADD_CONV_:
-    model = DrosophVAEConv(**{**model_config, 'with_batch_norm': run_config['with_batch_norm']})
-elif run_config['model_impl'] == _MODEL_IMPL_SKIP_CON_:
-    model = DrosophVAESkipConv(**model_config)
+train_dataset = to_tf_data(X_train, y_train, batch_size=run_cfg['batch_size'])
+test_dataset = to_tf_data(X_test, y_test, batch_size=run_cfg['batch_size']) 
+
+if run_cfg['use_time_series']:
+    back_to_single_time = np.s_[:, -1, :]
 else:
-    raise ValueError('not such model')
-
-model.inference_net.summary(line_length=100)
-model.generative_net.summary(line_length=100)
-
-optimizer = tf.train.AdamOptimizer(1e-4)
-#optimizer = tf.train.AdadeltaOptimizer(1e-4)
-run_config['optimizer'] = optimizer._name
-_config_hash_ = config.get_config_hash(run_config)
-_base_path_ = f"{settings.config.__DATA_ROOT__}/tvae_logs/{config.config_description(run_config, short=True)}_{_config_hash_}"
-_model_checkpoints_path_ = f"{settings.config.__DATA_ROOT__}/models/{config.config_description(run_config, short=True)}_{_config_hash_}/checkpoint" 
-train_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/train')
-test_summary_writer = tfc.summary.create_file_writer(_base_path_ + '/test')
+    back_to_single_time = np.s_[:]
+    
+X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 # <codecell>
 
-# This is the run cell. Designed to be able to train the model for an arbitrary amount of epochs.
-def _compute_loss_for_data_(model, data):
-    loss = tfe.metrics.Mean()
-    recon = tfe.metrics.Mean()
-    kl = tfe.metrics.Mean()
-    for batch in data:
-        loss_b, recon_b, kl_b  = compute_loss(model, batch, detailed=True)
-        loss(loss_b)
-        recon(recon_b)
-        kl(kl_b)
+from itertools import product
+
+def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_steps=1, supervised_epochs=5):
+    parameters = product(*grid_search_params.values())
+    cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
+
+    for p, cfg in cfgs:
+        #
+        # Unsupervised part
+        #
         
-    total_loss = loss.result()
-    total_recon = recon.result()
-    total_kl = kl.result()
-    
-    return total_loss, total_recon, total_kl
-
-def _progress_str_(epoch, _cur_train_reports, _cur_test_reports, time=None, stopped=False):
-    progress_str = f"Epoch: {epoch:0>4}, train/test loss: {_cur_train_reports[-1][0]:0.3f}\t {_cur_test_reports[-1][0]:0.3f}"
-    if time:
-        progress_str += f" took {time:0.3f} sec"
         
-    if stopped:
-        progress_str = "Stopped training during " + progress_str
+        # this allows continuous training with a fixed number of epochs. uuuh yeah.
+        # there is however a side-effect problem here. I am running this on a GPU, `init` and `train` need to be called in order.
+        # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
+        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+        vae_training_results = {}
+        vae_eval_results = []
         
-    return progress_str
+        try:
+            for u in range(np.int(epochs / eval_steps)):
+                    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                              train_dataset=train_dataset, 
+                                                              test_dataset=test_dataset,
+                                                              early_stopping=False,
+                                                              n_epochs=eval_steps)
 
+                    vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+                #for n, p in vae_eval_results[-1]['plot_paths'].items():
+                #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
 
-print(f"will train model {model._config_()}, with global params: {run_config}, hash: {_config_hash_}")
-print(f"will train for ever...")
-epoch = len(train_reports)
+            vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+        except Exception:
+            print(f"problem with {vae_training_args}: {traceback.format_exc()}")
+            next()
+            
+        #
+        # Supervised part
+        # 
+        
+        try:
+            # the training process saves the model with the min loss.
+            base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
+            base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
+            supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
+            supervised_training_results = {}
+            supervised_eval_results = []
+
+            for u in range(np.int(epochs / eval_steps)):
+                supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                                          train_dataset=train_dataset, 
+                                                          test_dataset=test_dataset,
+                                                          early_stopping=False,
+                                                          n_epochs=eval_steps)
+
+                base_mdl.inference_net = supervised_training_results['model']
+                supervised_training_results['model'] = base_mdl 
+                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+                supervised_training_results['model'] = base_mdl.inference_net
+
+            base_mdl.inference_net = supervised_training_results['model']
+            supervised_training_results['model'] = base_mdl 
+            supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+            supervised_training_results['model'] = base_mdl.inference_net
+        except Exception:
+            print(f"problem with {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
+            next()
+        
+        plt.close('all')
+        
+        yield (p, 
+               vae_training_results['train_reports'], 
+               vae_training_results['test_reports'],
+               vae_training_args['model_checkpoints_path'],
+               vae_eval_results,
+               supervised_training_results['train_reports'],
+               supervised_training_results['test_reports'],
+               supervised_training_args['model_checkpoints_path'],
+               supervised_eval_results)
+
+# <codecell>
+
+import logging
+
+class NoParsingFilter(logging.Filter):
+    def filter(self, record):
+        return not ('input image is not divisible' in record.getMessage())
+
+# such a pain in the ass
+logger= logging.getLogger('imageio_ffmpeg')
+logger.setLevel(logging.INFO)
+logger.addFilter(NoParsingFilter())
+
+# <codecell>
+
+from datetime import datetime
+# Note that the data will be reused -> Don't adapt the data_type here. 
+# Either include the data loading into the grid-search or make two runs, one for each DataType
+
+grid_search_params = {
+    'model_impl': config.ModelType.values(),
+    'latent_dim': [1, 2, ]
+}
 
 with warnings.catch_warnings():
-    # pesky tensorflow again
     warnings.simplefilter(action='ignore', category=FutureWarning)
-    while True:
-        try:
-            start_time = time.time()
-            for train_x in train_dataset:
-                gradients, loss = compute_gradients(model, train_x)
-                apply_gradients(optimizer, gradients, model.trainable_variables)
-            end_time = time.time()
-
-            _cur_train_reports += [_compute_loss_for_data_(model, train_dataset)]
-            _cur_test_reports += [_compute_loss_for_data_(model, test_dataset)]
-            
-            _recorded_scalars_ =  ['loss', 'recon', 'kl']
-            tf_helpers.tf_write_scalars(train_summary_writer, zip(_recorded_scalars_, _cur_train_reports[-1]), step=epoch)
-            tf_helpers.tf_write_scalars(test_summary_writer,  zip(_recorded_scalars_, _cur_test_reports[-1]),  step=epoch)
-
-            with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-                for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.trainable_variables]):
-                    tfc.summary.histogram(f'gradient_{var_name}', g, step=epoch)
-
-            if epoch % 10 == 0:
-                print(_progress_str_(epoch, _cur_train_reports, _cur_test_reports, time=end_time - start_time))
-                tfc.summary.flush()
-            else:
-                # simple "loading bar"
-                print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
-                
-            if epoch > 10 and _cur_test_reports[-1][0] < _cur_test_reports[cur_min_val_idx][0]:
-                cur_min_val_idx = epoch
-                model.save_weights(_model_checkpoints_path_)
-                
-            epoch += 1
-
-            if np.argmin(np.array(_cur_test_reports)[:, 1]) < (len(_cur_test_reports) - 10):
-                # if there was no improvement in the last 10 epochs, stop it
-                print('early stopping')
-                break
-        except KeyboardInterrupt:
-            tfc.summary.flush()
-            print(_progress_str_(epoch, _cur_train_reports, _cur_test_reports, stopped=True))
-            break
-        
-        
-tfc.summary.flush()
-train_reports = np.array(_cur_train_reports)
-test_reports =  np.array(_cur_test_reports)
-
-train_losses = train_reports[:, 0]
-test_losses = test_reports[:, 0]
+    if SetupConfig.runs_on_lab_server():
+        started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
+        grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
+        misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
+    else:
+        grid_search_params = {
+            'model_impl': [config.ModelType.TEMP_CONV], # config.ModelType.values(),
+            'latent_dim': [2, ]
+        }
+        grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
+        misc.dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
-# triplet, semi-supervised learning block init cell
-triplet_epoch = 0
-
-triplet_test_losses = np.array([]) 
-triplet_train_losses = np.array([]) 
-triplet_cur_train_reports = []
-triplet_cur_test_reports  = []
-triplet_cur_min_val_idx = 0
-run_config['loss_weight_reconstruction'] = 1.0
-run_config['loss_weight_kl'] = 0.0 # 1e-3
-
-triplet_optimizer = tf.train.AdamOptimizer(1e-4)
-#optimizer = tf.train.AdadeltaOptimizer(1e-4)
-run_config['optimizer_triplet'] = optimizer._name
-_model_checkpoints_encoder_path_ = f"{settings.config.__DATA_ROOT__}/models/{config.config_description(run_config, short=True)}_{_config_hash_}_encoder/checkpoint" 
-
-labels_as_int = frames_idx_with_labels['label'].apply(lambda x: x.value).values
-triplet_train_dataset = to_tf_data(data_train, labels_as_int[run_config['time_series_length'] - 1:len(data_train)+run_config['time_series_length'] - 1])
-triplet_test_dataset = to_tf_data(data_test, labels_as_int[len(data_train) + run_config['time_series_length'] - 1:]) 
+stop
 
 # <codecell>
 
-# triplet loss
-"""Define functions to create the triplet loss with online triplet mining."""
-
-import tensorflow as tf
-
-
-def _pairwise_distances(embeddings, squared=False):
-    """Compute the 2D matrix of distances between all the embeddings.
-
-    Args:
-        embeddings: tensor of shape (batch_size, embed_dim)
-        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
-                 If false, output is the pairwise euclidean distance matrix.
-
-    Returns:
-        pairwise_distances: tensor of shape (batch_size, batch_size)
-    """
-    # Get the dot product between all embeddings
-    # shape (batch_size, batch_size)
-    dot_product = tf.matmul(embeddings, tf.transpose(embeddings))
-
-    # Get squared L2 norm for each embedding. We can just take the diagonal of `dot_product`.
-    # This also provides more numerical stability (the diagonal of the result will be exactly 0).
-    # shape (batch_size,)
-    square_norm = tf.diag_part(dot_product)
-
-    # Compute the pairwise distance matrix as we have:
-    # ||a - b||^2 = ||a||^2  - 2 <a, b> + ||b||^2
-    # shape (batch_size, batch_size)
-    distances = tf.expand_dims(square_norm, 1) - 2.0 * dot_product + tf.expand_dims(square_norm, 0)
-
-    # Because of computation errors, some distances might be negative so we put everything >= 0.0
-    distances = tf.maximum(distances, 0.0)
-
-    if not squared:
-        # Because the gradient of sqrt is infinite when distances == 0.0 (ex: on the diagonal)
-        # we need to add a small epsilon where distances == 0.0
-        mask = tf.cast(tf.equal(distances, 0.0), tf.float32)
-        distances = distances + mask * 1e-16
-
-        distances = tf.sqrt(distances)
-
-        # Correct the epsilon added: set the distances on the mask to be exactly 0.0
-        distances = distances * (1.0 - mask)
-
-    return distances
-
-
-def _get_anchor_positive_triplet_mask(labels):
-    """Return a 2D mask where mask[a, p] is True iff a and p are distinct and have same label.
-
-    Args:
-        labels: tf.int32 `Tensor` with shape [batch_size]
-
-    Returns:
-        mask: tf.bool `Tensor` with shape [batch_size, batch_size]
-    """
-    # Check that i and j are distinct
-    indices_equal = tf.cast(tf.eye(tf.shape(labels)[0]), tf.bool)
-    indices_not_equal = tf.logical_not(indices_equal)
-
-    # Check if labels[i] == labels[j]
-    # Uses broadcasting where the 1st argument has shape (1, batch_size) and the 2nd (batch_size, 1)
-    labels_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
-
-    # Combine the two masks
-    mask = tf.logical_and(indices_not_equal, labels_equal)
-
-    return mask
-
-
-def _get_anchor_negative_triplet_mask(labels):
-    """Return a 2D mask where mask[a, n] is True iff a and n have distinct labels.
-
-    Args:
-        labels: tf.int32 `Tensor` with shape [batch_size]
-
-    Returns:
-        mask: tf.bool `Tensor` with shape [batch_size, batch_size]
-    """
-    # Check if labels[i] != labels[k]
-    # Uses broadcasting where the 1st argument has shape (1, batch_size) and the 2nd (batch_size, 1)
-    labels_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
-
-    mask = tf.logical_not(labels_equal)
-
-    return mask
-
-
-def _get_triplet_mask(labels):
-    """Return a 3D mask where mask[a, p, n] is True iff the triplet (a, p, n) is valid.
-
-    A triplet (i, j, k) is valid if:
-        - i, j, k are distinct
-        - labels[i] == labels[j] and labels[i] != labels[k]
-
-    Args:
-        labels: tf.int32 `Tensor` with shape [batch_size]
-    """
-    # Check that i, j and k are distinct
-    indices_equal = tf.cast(tf.eye(tf.shape(labels)[0]), tf.bool)
-    indices_not_equal = tf.logical_not(indices_equal)
-    i_not_equal_j = tf.expand_dims(indices_not_equal, 2)
-    i_not_equal_k = tf.expand_dims(indices_not_equal, 1)
-    j_not_equal_k = tf.expand_dims(indices_not_equal, 0)
-
-    distinct_indices = tf.logical_and(tf.logical_and(i_not_equal_j, i_not_equal_k), j_not_equal_k)
-
-
-    # Check if labels[i] == labels[j] and labels[i] != labels[k]
-    label_equal = tf.equal(tf.expand_dims(labels, 0), tf.expand_dims(labels, 1))
-    i_equal_j = tf.expand_dims(label_equal, 2)
-    i_equal_k = tf.expand_dims(label_equal, 1)
-
-    valid_labels = tf.logical_and(i_equal_j, tf.logical_not(i_equal_k))
-
-    # Combine the two masks
-    mask = tf.logical_and(distinct_indices, valid_labels)
-
-    return mask
-
-
-def batch_all_triplet_loss(labels, embeddings, margin, squared=False):
-    """Build the triplet loss over a batch of embeddings.
-
-    We generate all the valid triplets and average the loss over the positive ones.
-
-    Args:
-        labels: labels of the batch, of size (batch_size,)
-        embeddings: tensor of shape (batch_size, embed_dim)
-        margin: margin for triplet loss
-        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
-                 If false, output is the pairwise euclidean distance matrix.
-
-    Returns:
-        triplet_loss: scalar tensor containing the triplet loss
-    """
-    # Get the pairwise distance matrix
-    pairwise_dist = _pairwise_distances(embeddings, squared=squared)
-
-    # shape (batch_size, batch_size, 1)
-    anchor_positive_dist = tf.expand_dims(pairwise_dist, 2)
-    assert anchor_positive_dist.shape[2] == 1, "{}".format(anchor_positive_dist.shape)
-    # shape (batch_size, 1, batch_size)
-    anchor_negative_dist = tf.expand_dims(pairwise_dist, 1)
-    assert anchor_negative_dist.shape[1] == 1, "{}".format(anchor_negative_dist.shape)
-
-    # Compute a 3D tensor of size (batch_size, batch_size, batch_size)
-    # triplet_loss[i, j, k] will contain the triplet loss of anchor=i, positive=j, negative=k
-    # Uses broadcasting where the 1st argument has shape (batch_size, batch_size, 1)
-    # and the 2nd (batch_size, 1, batch_size)
-    triplet_loss = anchor_positive_dist - anchor_negative_dist + margin
-
-    # Put to zero the invalid triplets
-    # (where label(a) != label(p) or label(n) == label(a) or a == p)
-    mask = _get_triplet_mask(labels)
-    mask = tf.cast(mask, tf.float32)
-    triplet_loss = tf.multiply(mask, triplet_loss)
-
-    # Remove negative losses (i.e. the easy triplets)
-    triplet_loss = tf.maximum(triplet_loss, 0.0)
-
-    # Count number of positive triplets (where triplet_loss > 0)
-    valid_triplets = tf.cast(tf.greater(triplet_loss, 1e-16), tf.float32)
-    num_positive_triplets = tf.reduce_sum(valid_triplets)
-    num_valid_triplets = tf.reduce_sum(mask)
-    fraction_positive_triplets = num_positive_triplets / (num_valid_triplets + 1e-16)
-
-    # Get final mean triplet loss over the positive valid triplets
-    triplet_loss = tf.reduce_sum(triplet_loss) / (num_positive_triplets + 1e-16)
-
-    return triplet_loss, fraction_positive_triplets
-
-
-def batch_hard_triplet_loss(labels, embeddings, margin, squared=False):
-    """Build the triplet loss over a batch of embeddings.
-
-    For each anchor, we get the hardest positive and hardest negative to form a triplet.
-
-    Args:
-        labels: labels of the batch, of size (batch_size,)
-        embeddings: tensor of shape (batch_size, embed_dim)
-        margin: margin for triplet loss
-        squared: Boolean. If true, output is the pairwise squared euclidean distance matrix.
-                 If false, output is the pairwise euclidean distance matrix.
-
-    Returns:
-        triplet_loss: scalar tensor containing the triplet loss
-    """
-    # Get the pairwise distance matrix
-    pairwise_dist = _pairwise_distances(embeddings, squared=squared)
-
-    # For each anchor, get the hardest positive
-    # First, we need to get a mask for every valid positive (they should have same label)
-    mask_anchor_positive = _get_anchor_positive_triplet_mask(labels)
-    mask_anchor_positive = tf.cast(mask_anchor_positive, tf.float32)
-
-    # We put to 0 any element where (a, p) is not valid (valid if a != p and label(a) == label(p))
-    anchor_positive_dist = tf.multiply(mask_anchor_positive, pairwise_dist)
-
-    # shape (batch_size, 1)
-    hardest_positive_dist = tf.reduce_max(anchor_positive_dist, axis=1, keepdims=True)
-    tf.summary.scalar("hardest_positive_dist", tf.reduce_mean(hardest_positive_dist))
-
-    # For each anchor, get the hardest negative
-    # First, we need to get a mask for every valid negative (they should have different labels)
-    mask_anchor_negative = _get_anchor_negative_triplet_mask(labels)
-    mask_anchor_negative = tf.cast(mask_anchor_negative, tf.float32)
-
-    # We add the maximum value in each row to the invalid negatives (label(a) == label(n))
-    max_anchor_negative_dist = tf.reduce_max(pairwise_dist, axis=1, keepdims=True)
-    anchor_negative_dist = pairwise_dist + max_anchor_negative_dist * (1.0 - mask_anchor_negative)
-
-    # shape (batch_size,)
-    hardest_negative_dist = tf.reduce_min(anchor_negative_dist, axis=1, keepdims=True)
-    tf.summary.scalar("hardest_negative_dist", tf.reduce_mean(hardest_negative_dist))
-
-    # Combine biggest d(a, p) and smallest d(a, n) into final triplet loss
-    triplet_loss = tf.maximum(hardest_positive_dist - hardest_negative_dist + margin, 0.0)
-
-    # Get final mean triplet loss
-    triplet_loss = tf.reduce_mean(triplet_loss)
-
-    return triplet_loss
+reload(tf_helpers)
+reload(vae_training)
+reload(video)
 
 # <codecell>
 
-# LOSS LABEL FUNCTION
+if not SetupConfig.runs_on_lab_server():
+    reload(vae_training)
+    epochs = 14
+    eval_steps = 7
+    run_cfg['latent_dim'] = 6
+    vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+    vae_training_results = {}
+    eval_results = []
+    for u in range(np.int(epochs / eval_steps)):
+        vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                  train_dataset=train_dataset, 
+                                                  test_dataset=test_dataset,
+                                                  early_stopping=False,
+                                                  n_epochs=eval_steps)
 
-def compute_loss_labels(x, labels):
-    """About triplet loss: https://omoindrot.github.io/triplet-loss
-    
-    """
-    #triplet_loss = tfc.losses.metric_learning.triplet_semihard_loss(labels, np.hstack((mean, var)))
-    #loss = triplet_loss.batch_all_triplet_loss(labels, np.hstack((mean, var)), 0.1)
-    loss, loss_fraction_pos = batch_all_triplet_loss(labels, x, 1., squared=True)
-    #triplet_loss = tfc.losses.metric_learning.cluster_loss(labels, np.hstack((mean, var)), 0.1)
-    
-    return loss
+        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
-
-def triplet_compute_gradients(model, x, y): 
-    with tf.GradientTape() as tape: 
-        #mean, var = model(x)
-        #encoded = tf.nn.l2_normalize(((mean, var)))
-        loss = compute_loss_labels(tf.concat(model(x), axis=1), y) 
-        return tape.gradient(loss, model.trainable_variables), loss
-    
-    
-def _compute_loss_for_data_triplet_(model, data):
-    loss = tfe.metrics.Mean()
-    for x, y in data:
-        #mean, var = model(batch_x)
-        #encoded = tf.nn.l2_normalize(((mean, var)))
-        #loss_b = compute_loss_labels(mean, batch_y) 
-        loss_b = compute_loss_labels(tf.concat(model(x), axis=1), y) 
-        #loss_b = compute_loss_labels(model, batch_x, batch_y)
-        loss(loss_b)
-        
-    return loss.result()
+    eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
 # <codecell>
 
-#grad, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
+reload(supervised_training)
+
+cfg = RunConfig(model_impl=config.ModelType.TEMP_CONV, latent_dim=1)
+vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+vae_training_results = {}
+vae_eval_results = []
+epochs = 14
+eval_steps = 7
+
+try:
+    for u in range(np.int(epochs / eval_steps)):
+            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                      train_dataset=train_dataset, 
+                                                      test_dataset=test_dataset,
+                                                      early_stopping=False,
+                                                      n_epochs=eval_steps)
+
+            vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+        #for n, p in vae_eval_results[-1]['plot_paths'].items():
+        #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
+
+    vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+except Exception:
+    print(f"problem with {vae_training_args}: {traceback.format_exc()}")
+
+
+# the training process saves the model with the min loss.
+base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
+base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
+supervised_training_results = {}
+supervised_eval_results = []
+
+for u in range(np.int(epochs / eval_steps)):
+    supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                              train_dataset=train_dataset, 
+                                              test_dataset=test_dataset,
+                                              early_stopping=False,
+                                              n_epochs=eval_steps)
+
+    base_mdl.inference_net = supervised_training_results['model']
+    supervised_training_results['model'] = base_mdl 
+    supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+    supervised_training_results['model'] = base_mdl.inference_net
+
+base_mdl.inference_net = supervised_training_results['model']
+supervised_training_results['model'] = base_mdl 
+supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+supervised_training_results['model'] = base_mdl.inference_net
 
 # <codecell>
 
-# debug
-#from functools import partial
-#
-#def wrapped_cll(x, y):
-#    return
-#
-#grad_fn = tfe.gradients_function()
-#
-#tf.expand_dims(tf.concat(_m(train_x), axis=1), axis=1).numpy().shape
-#
-#grad_y, grad_x = grad_fn(train_y, tf.concat(_m(train_x), axis=1))
-#
-#grad_x
-#
-#with tf.GradientTape() as tape: 
-#    tape.watch(train_x)
-#    loss = compute_loss_labels(_m, train_x, train_y) 
-#    #print(model.inference_net.trainable_variables)
-#    grad = tape.gradient(loss, _m.trainable_variables)
-#
-#loss, len(grad), len(_m.trainable_variables), grad[:3]
-#
-#with tf.GradientTape() as tape: 
-#    loss = compute_loss(model, train_x) 
-#    grad = tape.gradient(loss, model.trainable_variables)
+X[back_to_single_time].shape
 
 # <codecell>
 
-def _progress_str_triplet_(epoch, _cur_train_reports, _cur_test_reports, time=None, stopped=False):
-    progress_str = f"Epoch: {epoch:0>4}, train/test loss: {_cur_train_reports[-1]:0.3f}\t {_cur_test_reports[-1]:0.3f}"
-    if time:
-        progress_str += f" took {time:0.3f} sec"
-        
-    if stopped:
-        progress_str = "Stopped training during " + progress_str
-        
-    return progress_str
+supervised_training_args['model'](X)
 
 # <codecell>
 
-# This is the run cell. Designed to be able to train the model.inference_net for an arbitrary amount of epochs.
+X.shape
 
-from functools import partial
+# <codecell>
 
-print(f"will train for ever...")
-triplet_epoch = len(triplet_train_losses)
+get_latent_space(supervised_training_results['model'], X)
+#     17         return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
+#     18     else:
+#---> 19         return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
 
-# todo wrap below code using this
-#@tf.function
-#def train(model, dataset, optimizer):
-#    for x, y in dataset:
-#        with tf.GradientTape() as tape:
-#            prediction = model(x)
-#            loss = loss_fn(prediction, y)
-#        gradients = tape.gradient(loss, model.trainable_variables)
-#        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+# <codecell>
 
-#loss_fn = partial(batch_hard_triplet_loss, margin=1.)
-#grad_fn = tfe.gradients_function(partial(compute_loss_labels, model=model.inference_net))
+a = tf.zeros((128, 16, 4))
+b = tf.zeros((128, 16, 4))
 
-with warnings.catch_warnings():
-    # pesky tensorflow again
-    warnings.simplefilter(action='ignore', category=FutureWarning)
-    while True:
-        try:
-            start_time = time.time()
-            for train_x, train_y in triplet_train_dataset:
-                gradients, loss = triplet_compute_gradients(model.inference_net, train_x, train_y)
-                #loss = compute_loss_labels(model.inference_net, train_x, train_y) 
-                #grad_y, gradients = grad_fn(train_y, train_x)
-                apply_gradients(triplet_optimizer, gradients, model.inference_net.trainable_variables)
-            end_time = time.time()
+# <codecell>
 
-            triplet_cur_train_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_train_dataset)]
-            triplet_cur_test_reports += [_compute_loss_for_data_triplet_(model.inference_net, triplet_test_dataset)]
-            
-            _triplet_recorded_scalars_ =  ['triplet_loss']
-            tf_helpers.tf_write_scalars(train_summary_writer, zip(_triplet_recorded_scalars_, [triplet_cur_train_reports[-1]]), step=triplet_epoch)
-            tf_helpers.tf_write_scalars(test_summary_writer,  zip(_triplet_recorded_scalars_, [triplet_cur_test_reports[-1]]),  step=triplet_epoch)
+tf.concat((a, b), axis=-1).shape
 
-            with train_summary_writer.as_default(), tfc.summary.always_record_summaries():
-                for g, var_name in zip(gradients, [tf_helpers.tf_clean_variable_name(v.name) for v in model.inference_net.trainable_variables]):
-                    tfc.summary.histogram(f'gradient_{var_name}', g, step=triplet_epoch)
+# <codecell>
 
-            if triplet_epoch % 10 == 0:
-                print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, time=end_time - start_time))
-                tfc.summary.flush()
-            else:
-                # simple "loading bar"
-                print('=' * (triplet_epoch % 10) + '.' * (10 - (triplet_epoch % 10)), end='\r')
-                
-            #if triplet_epoch > 10 and triplet_cur_test_reports[-1][0] < triplet_cur_test_reports[cur_min_val_idx][0]:
-            #    cur_min_val_idx = triplet_epoch
-            #    model.inference_net.save_weights(_model_checkpoints_path_)
-                
-            triplet_epoch += 1
+eval_results
 
-            #if np.argmin(np.array(triplet_cur_test_reports)[:, 1]) < (len(triplet_cur_test_reports) - 10):
-            #    # if there was no improvement in the last 10 epochs, stop it
-            #    print('early stopping')
-            #    break
-        except KeyboardInterrupt:
-            tfc.summary.flush()
-            print(_progress_str_triplet_(triplet_epoch, triplet_cur_train_reports, triplet_cur_test_reports, stopped=True))
-            break
-        
-        
-tfc.summary.flush()
-triplet_train_losses = np.array(triplet_cur_train_reports)
-triplet_test_losses =  np.array(triplet_cur_test_reports)
+# <codecell>
+
+vae_training_results['test_reports'][:, 0]
+
+# <codecell>
+
+vae_training
+
+# <codecell>
+
+eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
+
+# <codecell>
+
+from drosoph_vae.settings.data import Experiment, experiment_key
+from PIL import Image
+
+# <codecell>
+
+
+
+# <codecell>
+
+base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], 
+                                                   input_shape=X_train.shape[1:],
+                                                   batch_size=run_cfg['batch_size'])
+base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+X_hat = base_mdl(X).numpy()[back_to_single_time]
+X_hat = _reshape_and_rescale_(X_hat, data_type=run_cfg['data_type'])
+
+cluster_assignments = AgglomerativeClustering(n_clusters=2 * len(list(config.Behavior)), linkage='average')\
+        .fit_predict(X_encoded)
+
+hubert = Experiment(**SetupConfig.value('hubert'))
+hubert_idx = np.array([same_experiment_same_fly(l, hubert) for l in y_frames[back_to_single_time][:, 1]])
+
+exp_descs = np.array([experiment_key(obj=l) for l in y_frames[back_to_single_time][:, 1]])
+
+X_hat = X_hat[hubert_idx, :]
+cluster_assignments = cluster_assignments[hubert_idx]
+image_id_with_exp = y_frames[back_to_single_time][hubert_idx]
+paths = [video._path_for_image_(image_id, label) for image_id, label in image_id_with_exp]
+
+labels = [l.label.name for l in y_frames[back_to_single_time][hubert_idx, 1]]
+mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
+X_hat = (X_hat *std_) + mean_
+
+_t = frame_data.reshape(-1, 15, 2)
+X_raw_input = np.vstack((_t[run_cfg['time_series_length'] - 1:n_train_data_points], _t[n_train_data_points + run_cfg['time_series_length'] -1:]))
+
+X_raw_input = (X_raw_input * std_) + mean_
+X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)][hubert_idx]
+X_hat = np.clip(X_hat, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
+
+comparision_video_of_reconstruction((X_raw_input, X_hat), cluster_assignments, image_id_with_exp, labels, n_train_data_points, paths, run_desc=run_cfg.description())
+
+# <codecell>
+
+import cv2
+
+# <codecell>
+
+display_video('./tryout.mp4')
+
+# <codecell>
+
+
+
+# <codecell>
+
+X_encoded = np.hstack([t.numpy() for t in base_mdl.encode(X)])
+
+# <codecell>
+
+
+
+# <codecell>
+
+SetupConfig.value('fly_image_template')
+
+# <codecell>
+
+X_eval.shape
+
+# <codecell>
+
+
+
+# <codecell>
+
+normalisation_factors.keys()
+
+# <codecell>
+
+
+
+# <codecell>
+
+
+
+# <codecell>
+
+
+
+# <codecell>
+
+stop
 
 # <markdowncell>
 
@@ -1762,107 +792,47 @@ triplet_test_losses =  np.array(triplet_cur_test_reports)
 
 # <codecell>
 
-def _reverse_to_original_shape_(X):
-    rescaled = scaler.inverse_transform(X)
-    if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-        return rescaled.reshape(-1, 15, 2)
-    else:
-        return rescaled
-
-# <codecell>
-
-# data pipeline for evaluation
-
-exp_desc = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)})
-exp_desc_short = config.exp_desc(run_config, {**model._config_(), 'epochs': len(train_losses)}, short=True)
-input_data_raw = np.vstack((data_train, data_test))
-
-if run_config['use_time_series']:
-    back_to_single_time = np.s_[:, -1, :]
-else:
-    back_to_single_time = np.s_[:]
-    
-
-input_data = _reverse_to_original_shape_(input_data_raw[back_to_single_time])
-reconstructed_data = _reverse_to_original_shape_(model(input_data_raw, apply_sigmoid=False).numpy()[back_to_single_time])
-    
-_min_nb_batches_for_sample_length_ = int(np.ceil(len(input_data_raw) / run_config['batch_size']))
-generated_data = _reverse_to_original_shape_(np.vstack([model.sample().numpy() for _ in range(_min_nb_batches_for_sample_length_)])[back_to_single_time])[:len(reconstructed_data)]
-
-# <codecell>
-
-# losses
-for a, n in zip(range(train_reports.shape[1]), _recorded_scalars_):
-    plt.subplot(train_reports.shape[1] + 1, 1, a + 1)
-    plt.plot(train_reports[:, a], label=f"train_{n}")
-    plt.plot(test_reports[:, a], label=f"test_{n}")
-    plt.title(n)
-    
-plt.tight_layout()
-plt.legend()
-
-# <codecell>
-
-plt.plot(triplet_train_losses)
-plt.plot(triplet_test_losses)
-
-# <codecell>
-
-#plots.plot_losses(train_losses, test_losses, exp_desc=exp_desc);
-
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    fig = plots.plot_comparing_joint_position_with_reconstructed(input_data,
-                                                                 reconstructed_data,
-                                                                 generated_data,
-                                                                 validation_cut_off=len(data_train),
-                                                                 exp_desc=exp_desc_short);
-else:
-    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
-    if run_config['use_all_experiments']:
-        start = 100
-        end = 1000
-    else:
-        start = 0
-        end = len(input_data)
-    xticks = np.arange(start, end)
-    if run_config['debug']:
-        _input_data = input_data_raw[:, :, 0]
-        _recon = model(input_data_raw, apply_sigmoid=False).numpy()[:, :, 0]
-        fig, axs = plt.subplots(nrows=_input_data.shape[-1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i in range(_input_data.shape[-1]):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, _input_data[_idx_], label='input')
-            axs[i].plot(xticks, _recon[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
-
-            #axs[i].set_title(cn)
-
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-    else:
-        fig, axs = plt.subplots(nrows=input_data.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-        for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
-            _idx_ = np.s_[start:end, i]
-            axs[i].plot(xticks, input_data[_idx_], label='input')
-            axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
-            #axs[i].plot(xticks, generated_data[_idx_], label='generated')
-
-            axs[i].set_title(cn)
-
-            #for a in axs[i]:
-            #    a.axvline(len(data_train), label='validation cut off', linestyle='--')
-
-    axs[-1].set_xlabel('time step')
-    axs[0].legend(loc='upper left')
-    
-    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.94)
-    plt.savefig(f"./figures/{exp_desc_short}_input_gen_recon_comparision.png")
+#if run_cfg['data_type'] == config.DataType.POS_2D:
+#    fig = plots.plot_comparing_joint_position_with_reconstructed(X_eval,
+#                                                                 X_hat_eval,
+#                                                                 X_gen_eval,
+#                                                                 validation_cut_off=n_train_data_points,
+#                                                                 exp_desc=exp_desc_short);
+#else:
+#    # ncols is an ugly hack... it works on the basis that we have three working angles for each leg
+#    if run_cfg['use_single_fly']:
+#        start = 0
+#        end = len(X_eval)
+#    else:
+#        start = 100
+#        end = 1000
+#    xticks = np.arange(start, end) / SetupConfig.value('frames_per_second') / 60.
+#    if run_cfg['debug']:
+#        _input_data = X[:, :, 0]
+#        _recon = model(X, apply_sigmoid=False).numpy()[:, :, 0]
+#        fig, axs = plt.subplots(nrows=_input_data.shape[-1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+#        for i in range(_input_data.shape[-1]):
+#            _idx_ = np.s_[start:end, i]
+#            axs[i].plot(xticks, _input_data[_idx_], label='input')
+#            axs[i].plot(xticks, _recon[_idx_], label='reconstructed')
+#    else:
+#        fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+#        for i, cn in enumerate(SD.get_3d_columns_names(selected_cols)):
+#            _idx_ = np.s_[start:end, i]
+#            axs[i].plot(xticks, X_eval[_idx_], label='input')
+#            axs[i].plot(xticks, reconstructed_data[_idx_], label='reconstructed')
+#
+#            axs[i].set_title(cn)
+#
+#    axs[-1].set_xlabel('time [min]')
+#    axs[0].legend(loc='upper left')
+#    
+#    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+#    plt.suptitle(f"Comparision of selection of data\n({exp_desc})")
+#    
+#    plt.tight_layout()
+#    plt.subplots_adjust(top=0.94)
+#    plt.savefig(f"./figures/{exp_desc_short}_input_gen_recon_comparision.png")
 
 # <markdowncell>
 
@@ -1870,65 +840,35 @@ else:
 
 # <codecell>
 
-from hdbscan import HDBSCAN
+#plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, run_cfg, epochs=len(vae_training_results['train_reports']))
 
 # <codecell>
 
-from collections import namedtuple
-from sklearn.manifold import TSNE
-
-LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
-
-if run_config['use_all_experiments']:
-    warnings.warn('should use all data `input_data`')
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-    else:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw[np.random.choice(len(input_data), 10000)])))
-else:
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(input_data_raw)))
-    else:
-        X_latent = LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(input_data_raw)))
-    
-X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
-
-# <codecell>
-
-cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
-cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-
-# <codecell>
-
-from matplotlib.collections import LineCollection
-
-def plot_debug(input_data, cluster_assignments, cluster_colors=None):
-    _clusters = np.unique(cluster_assignments)
-    _colors = sns.color_palette(n_colors=len(_clusters))
-    if cluster_colors is None:
-        cluster_colors = dict(zip(_clusters, _colors))
-        
-    lines, colors = zip(*[([(x, input_data[x, 0]) for x in segment], cluster_colors[cluster_id])
-                           for cluster_id, segments in video.group_by_cluster(cluster_assignments).items() 
-                           for segment in segments])
-
-
-    
-    fig, ax = plt.subplots(figsize=(10, 8))
-    coll = LineCollection(lines, colors=colors)
-    #coll.set_array(np.random.random(xy.shape[0]))
-
-    ax.add_collection(coll)
-    ax.autoscale_view()
-
-    plt.title('Input data and cluster assigment using debug data');
-    
-if run_config['debug']:
-    plot_debug(input_data, cluster_assignments)
-
-# <codecell>
-
-exp_desc_short
+#from matplotlib.collections import LineCollection
+#
+#def plot_debug(input_data, cluster_assignments, cluster_colors=None):
+#    _clusters = np.unique(cluster_assignments)
+#    _colors = sns.color_palette(n_colors=len(_clusters))
+#    if cluster_colors is None:
+#        cluster_colors = dict(zip(_clusters, _colors))
+#        
+#    lines, colors = zip(*[([(x, input_data[x, 0]) for x in segment], cluster_colors[cluster_id])
+#                           for cluster_id, segments in video.group_by_cluster(cluster_assignments).items() 
+#                           for segment in segments])
+#
+#
+#    
+#    fig, ax = plt.subplots(figsize=(10, 8))
+#    coll = LineCollection(lines, colors=colors)
+#    #coll.set_array(np.random.random(xy.shape[0]))
+#
+#    ax.add_collection(coll)
+#    ax.autoscale_view()
+#
+#    plt.title('Input data and cluster assigment using debug data');
+#    
+#if run_cfg['debug']:
+#    plot_debug(input_data, cluster_assignments)
 
 # <codecell>
 
@@ -1936,41 +876,24 @@ exp_desc_short
 # use this to add a different shape to the scatter plot
 # frames_idx_with_labels[:len(frames_of_interest)][frames_of_interest][run_config['time_series_length'] - 1:]['label'].apply(lambda x: x.value)
 
-# <codecell>
-
-from matplotlib import gridspec
-
-labels = frames_idx_with_labels['label'].apply(lambda x: x.name)
-
-fig = plt.figure(figsize=(20, 18))
-gs = gridspec.GridSpec(3, 2, figure=fig)
-ax1 = plt.subplot(gs[:2, :])
-ax2 = plt.subplot(gs[-1:, :1])
-ax3 = plt.subplot(gs[-1:, 1:])
-
-#plt.figure(figsize=(20, 12))
-#fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(20, 30))
-for cluster in np.unique(cluster_assignments):
-    c_idx = cluster_assignments == cluster
-    if run_config['use_all_experiments']:
-        c_idx = c_idx & (np.random.random(len(c_idx)) > 0.7) # don't show all of them, takes for ever otherwise
-    sns.scatterplot(X_latent_mean_tsne_proj[c_idx, 0], 
-                    X_latent_mean_tsne_proj[c_idx, 1], 
-                    label=cluster, 
-                    ax=ax1,
-                    color=cluster_colors[cluster], 
-                    style=labels[run_config['time_series_length'] - 1:][c_idx],
-                    legend='brief')
-    sns.scatterplot(X_latent.mean[c_idx, 0], X_latent.mean[c_idx, 1], label=cluster, ax=ax2)
-    sns.scatterplot(X_latent.var[c_idx, 0], X_latent.var[c_idx, 1], label=cluster, ax=ax3)
-    
-ax1.set_title('T-SNE proejection of latent space (mean & var stacked)')
-ax2.set_title('mean')
-ax3.set_title('var');
-
 # <markdowncell>
 
 # # videos
+
+# <codecell>
+
+#cluster_assignments = eval_results[-1]['cluster_assignments']
+#
+#group_videos = list(video.group_video_of_clusters(cluster_assignments, y_frames[back_to_single_time], run_cfg))
+
+# <codecell>
+
+stop
+
+# <codecell>
+
+
+#new_im.save('test.jpg')
 
 # <codecell>
 
@@ -1986,23 +909,6 @@ def video_prep_raw_data(data):
     
 def video_prep_recon_data(input_data):
     return reverse_pos_pipeline(scaler.inverse_transform(model(input_data).numpy()).reshape(-1, 15, 2))
-
-# <codecell>
-
-if run_config['data_type'] == _DATA_TYPE_2D_POS_:
-    _positional_data_ = [reverse_pos_pipeline(input_data, normalisation_factors=normalisation_factors), 
-                         reverse_pos_pipeline(reconstructed_data, normalisation_factors=normalisation_factors)]
-else:
-    raise NotImplementedError('give me a break')
-    
-p = video.comparision_video_of_reconstruction(_positional_data_,
-                                              images_paths_for_experiments=images_paths_for_experiments, 
-                                              n_train=len(data_train),
-                                              cluster_assignments=cluster_assignments,
-                                              as_frames=False,
-                                              exp_desc=exp_desc_short)
-
-display_video(p)
 
 # <codecell>
 
@@ -2083,7 +989,7 @@ print('cluster_vids: ', cluster_vids.keys())
 
 # <codecell>
 
-! cat ./som_vae/helpers/video.py
+! cat ./drosoph_vae/helpers/video.py
 
 # <codecell>
 

@@ -45,15 +45,15 @@ from IPython import display
 import sys
 #from drosophpose.GUI import skeleton
 
-from som_vae import somvae_model
-from som_vae.utils import *
+from drosoph_vae import somvae_model
+from drosoph_vae.utils import *
 
-from som_vae.helpers.misc import extract_args, chunks, foldl
-from som_vae.helpers.jupyter import fix_layout, display_video
-from som_vae.settings import config, skeleton
-from som_vae.helpers import video, plots
-from som_vae import preprocessing
-from som_vae.helpers.logging import enable_logging
+from drosoph_vae.helpers.misc import extract_args, chunks, foldl
+from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.settings import config, skeleton
+from drosoph_vae.helpers import video, plots
+from drosoph_vae import preprocessing
+from drosoph_vae.helpers.logging import enable_logging
     
 fix_layout()
 enable_logging()
@@ -73,8 +73,8 @@ enable_logging()
 
 # <codecell>
 
-from som_vae.helpers.misc import foldl
-from som_vae import settings
+from drosoph_vae.helpers.misc import foldl
+from drosoph_vae import settings
 
 joint_positions = settings.data.EXPERIMENTS\
     .map(config.positional_data)\
@@ -112,7 +112,7 @@ plots.ploting_frames(joint_positions - normalisation_factors)
 
 # <codecell>
 
-from som_vae import LSTM_Var_Autoencoder
+from drosoph_vae import LSTM_Var_Autoencoder
 
 # <markdowncell>
 
@@ -393,7 +393,7 @@ _som_dim = [8,8]
 
 # TODO add hash of config to modelpath
 
-som_vae_config = {
+drosoph_vae_config = {
     "num_epochs": 400,
     "patience": 100,
     "batch_size": 10, # len(joint_positions), # if time_series then each batch should be a time series
@@ -425,23 +425,23 @@ som_vae_config = {
 # todo add git commit hash to config name
 # todo change _name_ to something meaningful
 
-_ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(som_vae_config, sort_keys=True).encode()).hexdigest()[:5])
-som_vae_config['ex_name'] = _ex_name_
+_ex_name_ = "{}_{}_{}-{}_{}_{}".format(_name_, _latent_dim_, _som_dim[0], _som_dim[1], datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'), sha256(json.dumps(drosoph_vae_config, sort_keys=True).encode()).hexdigest()[:5])
+drosoph_vae_config['ex_name'] = _ex_name_
 
  
-som_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
-som_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
+drosoph_vae_config["logdir"] = "../neural_clustering_data/logs/{}".format(_ex_name_)
+drosoph_vae_config["modelpath"] = "../neural_clustering_data/models/{0}/{0}.ckpt".format(_ex_name_)
 
 # <codecell>
 
 # creating path to store model
-pathlib.Path(som_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
-pathlib.Path(som_vae_config['logdir']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(drosoph_vae_config['modelpath']).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(drosoph_vae_config['logdir']).parent.mkdir(parents=True, exist_ok=True)
 
-_MODEL_CONFIG_PATH_ = pathlib.Path(som_vae_config['logdir']).parent.parent / 'model_configs'
+_MODEL_CONFIG_PATH_ = pathlib.Path(drosoph_vae_config['logdir']).parent.parent / 'model_configs'
 _MODEL_CONFIG_PATH_.mkdir(exist_ok=True)
-with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
-    json.dump(som_vae_config, f)
+with open(f"{_MODEL_CONFIG_PATH_}/{drosoph_vae_config['ex_name']}.json", 'w') as f:
+    json.dump(drosoph_vae_config, f)
 
 # <markdowncell>
 
@@ -449,7 +449,7 @@ with open(f"{_MODEL_CONFIG_PATH_}/{som_vae_config['ex_name']}.json", 'w') as f:
 
 # <codecell>
 
-def to_time_series(x, y, sequence_length=som_vae_config['batch_size']):
+def to_time_series(x, y, sequence_length=drosoph_vae_config['batch_size']):
     def _gen_(data):
         for i in range(len(data)):
             if i + sequence_length <= len(data):
@@ -471,7 +471,7 @@ scaler = MinMaxScaler()
 
 print(f"total number of input data:{reshaped_joint_position.shape}")
 
-assert np.product(reshaped_joint_position.shape[1:]) > som_vae_config['latent_dim'],\
+assert np.product(reshaped_joint_position.shape[1:]) > drosoph_vae_config['latent_dim'],\
        'latent dimension should be strictly smaller than input dimensions, otherwise it\'s not really a VAE...'
 
 #nb_of_data_points = (reshaped_joint_position.shape[0] // config['batch_size']) * config['batch_size']
@@ -483,7 +483,7 @@ data_test = scaler.transform(reshaped_joint_position[nb_of_data_points:])
 # just generating some labels, no clue what they are for except validation?
 labels = frames_idx_with_labels['label'].apply(lambda x: x.value).values
 
-if som_vae_config['time_series']:
+if drosoph_vae_config['time_series']:
     data_train, labels_train = to_time_series(data_train, labels[:nb_of_data_points])
     data_test, labels_test = to_time_series(data_test, labels[nb_of_data_points:])
 else:
@@ -501,7 +501,7 @@ data = {
 
 # <codecell>
 
-som_vae_config
+drosoph_vae_config
 
 # <codecell>
 
@@ -601,7 +601,7 @@ def reverse_pos_pipeline(x, normalisation_term=normalisation_factors):
 
 # <codecell>
 
-from som_vae.helpers.video import _float_to_int_color_
+from drosoph_vae.helpers.video import _float_to_int_color_
 
 # <codecell>
 
@@ -615,7 +615,7 @@ joint_pos_encoding = np.vstack((reconstructed_from_encoding_train, reconstructed
 
 # <codecell>
 
-from som_vae.settings.data import EXPERIMENTS
+from drosoph_vae.settings.data import EXPERIMENTS
 
 # <codecell>
 
@@ -650,7 +650,7 @@ display_video(_p)
 # <codecell>
 
 # Creating videos for each cluster
-from som_vae.helpers import misc
+from drosoph_vae.helpers import misc
 reload(video)
 from collections import OrderedDict
 
@@ -746,7 +746,7 @@ _p = video.comparision_video_of_reconstruction([reverse_pos_pipeline(p) for p in
 _embedding_imgs = (video.plot_embedding_assignment(i, X_embedded, frames_idx_with_labels) for i in range(len(X_embedded)))
 frames = (video.combine_images_h(fly_img, embedding_img) for fly_img, embedding_img in zip(_p, _embedding_imgs))
 
-embedding_with_recon_path = f"../neural_clustering_data/videos/{som_vae_config['ex_name']}_embedding_with_recon.mp4"
+embedding_with_recon_path = f"../neural_clustering_data/videos/{drosoph_vae_config['ex_name']}_embedding_with_recon.mp4"
 video._save_frames_(embedding_with_recon_path, frames)
 display_video(embedding_with_recon_path)
 
