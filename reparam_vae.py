@@ -527,6 +527,15 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
 
 import logging
 
+class NoParsingFilter(logging.Filter):
+    def filter(self, record):
+        return not ('input image is not divisible' in record.getMessage())
+
+# such a pain in the ass
+logger= logging.getLogger('imageio_ffmpeg')
+logger.setLevel(logging.INFO)
+logger.addFilter(NoParsingFilter())
+
 # <codecell>
 
 from datetime import datetime
@@ -545,6 +554,10 @@ with warnings.catch_warnings():
         grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
     else:
+        grid_search_params = {
+            'model_impl': [config.ModelType.TEMP_CONV], # config.ModelType.values(),
+            'latent_dim': [2, ]
+        }
         grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
         misc.dump_results(grid_search_results, 'grid_search_only_vae')
 

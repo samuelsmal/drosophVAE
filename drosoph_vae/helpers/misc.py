@@ -94,6 +94,6 @@ def interpolate_arrays(arr1, arr2, num_steps=100, interpolation_length=0.3):
     return final_array
 
 def dump_results(results, config_desc):
-    misc.create_parents(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl")
+    create_parents(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl")
     with open(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl", 'wb') as f:
         pickle.dump(results, f)

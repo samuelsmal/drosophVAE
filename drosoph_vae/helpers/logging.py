@@ -23,6 +23,9 @@ class NoHitsFilter(logging.Filter):
         else:
             return True
 
+class NoParsingFilter(logging.Filter):
+    def filter(self, record):
+        return not record.getMessage().startswith('IMAGEIO FFMPEG_WRITER WARNING')
 
 def enable_logging(lvl=None):
     """Use this function to enable logging at the given level.
@@ -53,6 +56,8 @@ def enable_logging(lvl=None):
     logger.addHandler(stream_handler)
 
     logger.addFilter(NoHitsFilter())
+    logger.addFilter(NoParsingFilter())
+
     # something has to work... right?
     logger.addFilter(lambda s: not re.match('.*input image is not divisible by macro_block_size.*',
                                             s.getMessage()))
