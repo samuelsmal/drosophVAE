@@ -314,7 +314,9 @@ def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments,
 
     ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
     ax2.set_title('mean')
+    ax2.legend(loc='lower left')
     ax3.set_title('var')
+    ax3.legend(loc='lower right')
     figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_latent_space_tsne.png"
     plt.savefig(figure_path)
     return figure_path
@@ -411,13 +413,9 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
 
 # <codecell>
 
-eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
-
-# <codecell>
-
 from som_vae.losses.normalized_mutual_information import normalized_mutual_information
 from som_vae.losses.purity import purity
-
+from sklearn.cluster import AgglomerativeClustering
 
 def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
     model = training_results['model']
@@ -430,7 +428,7 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     if supervised:
         exp_desc_short = 'supervised' + exp_desc_short
 
-    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time])
+    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time], data_type=run_config['data_type'])
     
     if run_config['data_type'] == config.DataType.ANGLE_3D:
         plot_recon_path = plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
@@ -441,12 +439,13 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
                                                                  epochs=len(training_results['train_reports']), 
                                                                  run_desc=exp_desc_short)
 
-    return
-                
     X_latent = get_latent_space(training_results['model'], X)
     X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
 
-    cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+    #cluster_assignments = HDBSCAN(min_cluster_size=8).fit_predict(np.hstack((X_latent.mean, X_latent.var)))
+    # average because of the triplet loss (maybe? kinda makes sense... not?)
+    cluster_assignments = AgglomerativeClustering(n_clusters=2 * len(list(config.Behavior)), linkage='average')\
+        .fit_predict(np.hstack((X_latent.mean, X_latent.var)))
                                                                                       
     plot_latent_path = plot_latent_space(X_latent,
                                          X_latent_mean_tsne_proj,
@@ -462,10 +461,30 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
 
+    hubert = Experiment(**SetupConfig.value('hubert'))
+    hubert_idx = np.array([same_experiment_same_fly(l, hubert) for l in y_frames[back_to_single_time][:, 1]])
+
+    exp_descs = np.array([experiment_key(obj=l) for l in y_frames[back_to_single_time][:, 1]])
+
+    X_hat_eval = X_hat_eval[hubert_idx, :]
+    cluster_assignments = cluster_assignments[hubert_idx]
+    image_id_with_exp = y_frames[back_to_single_time][hubert_idx]
+    paths = [video._path_for_image_(image_id, label) for image_id, label in image_id_with_exp]
+
+    labels = [l.label.name for l in y_frames[back_to_single_time][hubert_idx, 1]]
+    mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
+    X_hat_eval = (X_hat_eval *std_) + mean_
+
+    X_raw_input = (frame_data.reshape(-1, 15, 2) * std_) + mean_
+    X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)]
+    X_hat_eval = np.clip(X_hat_eval, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
+
+    full_video_path = comparision_video_of_reconstruction((X_raw_input, X_hat_eval), cluster_assignments, image_id_with_exp, labels, n_train_data_points, paths, run_desc=exp_desc_short)
+
     return {'latent_projection': X_latent_mean_tsne_proj, 
             'cluster_assignments': cluster_assignments,
             'plot_paths': {'reconstruction': plot_recon_path, 'latent': plot_latent_path},
-            'video_paths': {'groups': group_videos},
+            'video_paths': {'groups': group_videos, 'hubert': full_video_path},
            }
 
 # <codecell>
@@ -493,6 +512,11 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
     cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
 
     for p, cfg in cfgs:
+        #
+        # Unsupervised part
+        #
+        
+        
         # this allows continuous training with a fixed number of epochs. uuuh yeah.
         # there is however a side-effect problem here. I am running this on a GPU, `init` and `train` need to be called in order.
         # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
@@ -516,9 +540,10 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
         eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
         
         #
-        # Unsupervised part
+        # Supervised part
         # 
         
+        # the training process saves the model with the min loss.
         base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], 
                                                            input_shape=X_train.shape[1:],
                                                            batch_size=run_cfg['batch_size'])
@@ -541,26 +566,26 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
         eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)
         
         yield p, 
-        vae_training_results['train_reports'], 
-        vae_training_results['test_reports'],
-        vae_training_args['model_checkpoints_path'],
-        eval_results,
-        supervised_training_results['train_reports'],
-        supervised_training_results['test_reports'],
-        supervised_training_args['model_checkpoints_path']
+            vae_training_results['train_reports'], 
+            vae_training_results['test_reports'],
+            vae_training_args['model_checkpoints_path'],
+            eval_results,
+            supervised_training_results['train_reports'],
+            supervised_training_results['test_reports'],
+            supervised_training_args['model_checkpoints_path']
 
 # <codecell>
 
+from datetime import datetime
 grid_search_params = {
-    'data_type': [config.DataType.POS_2D], # config.DataType.values(),
-    'model_impl':  config.ModelType.values()
-,
-    'latent_dim': [12, 16]
+    'data_type': [config.DataType.ANGLE_3D], # config.DataType.values(),
+    'model_impl':  config.ModelType.values(),
+    'latent_dim': [1, 2, 4,]
 }
 
 if SetupConfig.runs_on_lab_server():
     started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
-    grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=100))
+    grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
     dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
 
 # <codecell>
@@ -600,7 +625,111 @@ eval_results
 
 # <codecell>
 
+vae_training_results['test_reports'][:, 0]
+
+# <codecell>
+
+vae_training
+
+# <codecell>
+
 eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)
+
+# <codecell>
+
+from som_vae.settings.data import Experiment, experiment_key
+from PIL import Image
+
+# <codecell>
+
+def same_experiment_same_fly(exp_0, exp_1):
+    keys_0 = experiment_key(obj=exp_0).split('-')
+    keys_1 = experiment_key(obj=exp_1).split('-')
+    return keys_0[0] == keys_1[0] and keys_0[2] == keys_1[2]
+
+# <codecell>
+
+base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], 
+                                                   input_shape=X_train.shape[1:],
+                                                   batch_size=run_cfg['batch_size'])
+base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+X_hat = base_mdl(X).numpy()[back_to_single_time]
+X_hat = _reshape_and_rescale_(X_hat, data_type=run_cfg['data_type'])
+
+cluster_assignments = AgglomerativeClustering(n_clusters=2 * len(list(config.Behavior)), linkage='average')\
+        .fit_predict(X_encoded)
+
+hubert = Experiment(**SetupConfig.value('hubert'))
+hubert_idx = np.array([same_experiment_same_fly(l, hubert) for l in y_frames[back_to_single_time][:, 1]])
+
+exp_descs = np.array([experiment_key(obj=l) for l in y_frames[back_to_single_time][:, 1]])
+
+X_hat = X_hat[hubert_idx, :]
+cluster_assignments = cluster_assignments[hubert_idx]
+image_id_with_exp = y_frames[back_to_single_time][hubert_idx]
+paths = [video._path_for_image_(image_id, label) for image_id, label in image_id_with_exp]
+
+labels = [l.label.name for l in y_frames[back_to_single_time][hubert_idx, 1]]
+mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
+X_hat = (X_hat *std_) + mean_
+
+_t = frame_data.reshape(-1, 15, 2)
+X_raw_input = np.vstack((_t[run_cfg['time_series_length'] - 1:n_train_data_points], _t[n_train_data_points + run_cfg['time_series_length'] -1:]))
+
+X_raw_input = (X_raw_input * std_) + mean_
+X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)][hubert_idx]
+X_hat = np.clip(X_hat, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
+
+comparision_video_of_reconstruction((X_raw_input, X_hat), cluster_assignments, image_id_with_exp, labels, n_train_data_points, paths, run_desc=run_cfg.description())
+
+# <codecell>
+
+import cv2
+
+# <codecell>
+
+display_video('./tryout.mp4')
+
+# <codecell>
+
+
+
+# <codecell>
+
+X_encoded = np.hstack([t.numpy() for t in base_mdl.encode(X)])
+
+# <codecell>
+
+
+
+# <codecell>
+
+SetupConfig.value('fly_image_template')
+
+# <codecell>
+
+X_eval.shape
+
+# <codecell>
+
+
+
+# <codecell>
+
+normalisation_factors.keys()
+
+# <codecell>
+
+
+
+# <codecell>
+
+
+
+# <codecell>
+
+
 
 # <codecell>
 

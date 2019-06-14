@@ -147,10 +147,8 @@ def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
 def _float_to_int_color_(colors):
     return (np.array(colors) * 255).astype(np.int).tolist()
 
-
-def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_train,
-                                        images_paths_for_experiments, cluster_id_to_visualize=None,
-                                        cluster_colors=None, as_frames=False, exp_desc=None):
+def comparision_video_of_reconstruction(positional_data, cluster_assignments, image_id_with_exp, labels,
+                                        n_train_data_points, images_paths, cluster_colors=None, run_desc=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:
@@ -164,11 +162,6 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
     Returns:
         <str>                            the file path under which the gif was saved
     """
-    if cluster_id_to_visualize is None:
-        cluster_assignment_idx = list(range(len(cluster_assignments)))
-    else:
-        cluster_assignment_idx = np.where(cluster_assignments == cluster_id_to_visualize)[0]
-
     text_default_args = {
         "fontFace": 1,
         "fontScale": 1,
@@ -180,20 +173,16 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
         cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
 
     n_frames = positional_data[0].shape[0]
-    image_height, image_width, _ = cv2.imread(images_paths_for_experiments[0][1]).shape
-    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int)[cluster_assignment_idx].tolist()
+    image_height, image_width, _ = cv2.imread(images_paths[0]).shape
+    lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int).tolist()
 
-    _train_test_split_marker = np.int(n_train / n_frames * image_width)
+    _train_test_split_marker = np.int(n_train_data_points / n_frames * image_width)
     _train_test_split_marker_colours = [(255, 0, 0), (0, 255, 0)]
 
     _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
 
-    def pipeline(frame_nb, frame, frame_id, embedding_id, experiment, experiment_path=None):
-        # frame_nb is the number of the frame shown, continuous
-        # frame_id is the id of the order of the frame,
-        # e.g. frame_nb: [0, 1, 2, 3], frame_id: [123, 222, 333, 401]
-        # kinda ugly... note that some variables are from the upper "frame"
-        f = _add_frame_and_embedding_id_(frame, embedding_id, frame_id)
+    def pipeline(frame_id, frame):
+        f = _add_frame_and_embedding_id_(frame, cluster_assignments[frame_id], frame_id)
 
         # xs are the multiple positional data to plot
         for x_i, x in enumerate(positional_data):
@@ -201,7 +190,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
 
 
         # train test split marker
-        if n_train == frame_id:
+        if n_train_data_points == frame_id:
             cv2.line(f, (_train_test_split_marker, image_height - 20), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
         else:
             cv2.line(f, (_train_test_split_marker, image_height - 10), (_train_test_split_marker, image_height - 40), (255, 255, 255), 1)
@@ -211,57 +200,49 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, n_
         # train / test text
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text='train' if frame_id < n_train else 'test',
+                        text='train' if frame_id < n_train_data_points else 'test',
                         org=(_train_test_split_marker, image_height - 40),
-                        color=_train_test_split_marker_colours[0 if frame_id < n_train else 1])
+                        color=_train_test_split_marker_colours[0 if frame_id < n_train_data_points else 1])
 
         # experiment id
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text=data._key_(experiment),
+                        text=experiment_key(obj=image_id_with_exp[frame_id][1]),
                         org=(0, 20),
                         color=(255, 255, 255))
 
         # image id
-        _text_size, _ = cv2.getTextSize(**text_default_args, text=data._key_(experiment))
-        f = cv2.putText(**text_default_args,
-                        img=f,
-                        text=pathlib.Path(experiment_path).stem,
-                        org=(_text_size[0], 20),
-                        color=(255, 255, 255))
+        #_text_size, _ = cv2.getTextSize(**text_default_args, text=experiment_key(obj=image_id_with_exp[frame_id][1]))
+        #f = cv2.putText(**text_default_args,
+        #                img=f,
+        #                text=image_id_with_exp[frame_id][0],
+        #                org=(_text_size[0], 20),
+        #                color=(255, 255, 255))
 
         # model experiment description
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text=exp_desc,
+                        text=labels[frame_id],
                         org=(0, 40),
                         color=(255, 255, 255))
 
         # cluster assignment bar
         for line_idx, l in enumerate(lines_pos):
-            if line_idx == frame_nb:
-                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 2)
+            if line_idx == frame_id:
+                cv2.line(f, (l, image_height), (l, image_height - 20), cluster_colors[cluster_assignments[line_idx]], 2)
             else:
-                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[cluster_assignment_idx[line_idx]]], 1)
+                cv2.line(f, (l, image_height), (l, image_height - 10), cluster_colors[cluster_assignments[line_idx]], 1)
 
 
         return f
 
-    frames = (pipeline(frame_nb, cv2.imread(experiment[1]), frame_id, cluster_assignment,
-                       experiment[0], experiment_path=experiment[1])
-              for frame_nb, (frame_id, cluster_assignment, experiment) in enumerate(zip(
-                  cluster_assignment_idx,
-                  cluster_assignments[cluster_assignment_idx],
-                  np.array(images_paths_for_experiments)[cluster_assignment_idx]))
-              if pathlib.Path(experiment[1]).is_file())
+    frames = (pipeline(frame_id, cv2.imread(path)) for frame_id, path in enumerate(images_paths) if misc.is_file(path))
 
-    if as_frames:
-        return frames, cluster_assignment_idx
-    else:
-        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
-        _save_frames_(output_path, frames, format='mp4')
+    output_path = f"{SetupConfig.value('video_root_path')}/{run_desc}_e-{epochs}_hubert_full.mp4"
+    _save_frames_(output_path, frames, format='mp4')
 
-        return output_path
+    return output_path
+
 
 
 def plot_embedding_assignment(x_id_of_interest, X_embedded, label_assignments):
@@ -432,7 +413,7 @@ def group_video_of_cluster(cluster_id, paths, run_desc, epochs, n_sequences_to_d
     n_elements_x_dim = np.int(np.sqrt(n_sequences_to_draw))
     n_elements_y_dim = np.int(np.sqrt(n_sequences_to_draw))
 
-    combined_images = [Image.new('RGB', (3 * element_width, 3 * element_height)) for _ in range(len(images[0]))]
+    combined_images = [Image.new('RGB', (n_elements_x_dim * element_width, n_elements_y_dim * element_height)) for _ in range(len(images[0]))]
 
     for sequence_id, sequence in enumerate(images):
         x_offset = (sequence_id % n_elements_x_dim) * element_width

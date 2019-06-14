@@ -5,6 +5,9 @@ import socket
 from functools import reduce
 import inspect
 
+def is_file(path):
+    return pathlib.Path(path).is_file()
+
 def flatten(listOfLists):
     return reduce(list.__add__, listOfLists, [])
 
