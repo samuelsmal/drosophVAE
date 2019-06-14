@@ -37,7 +37,8 @@ def train(model,
           train_dataset=None,
           test_dataset=None,
           n_epochs=10,
-          early_stopping=True):
+          early_stopping=True,
+          **kwargs):
 
     if train_reports is None:
         train_reports = []
@@ -48,7 +49,7 @@ def train(model,
 
     cur_min_val_idx = 0
     epoch = len(train_reports)
-    print('epoch', epoch)
+    #print('epoch', epoch)
 
     with warnings.catch_warnings():
         # pesky tensorflow again
@@ -81,7 +82,7 @@ def train(model,
                     # simple "loading bar"
                     print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
 
-                if epoch > 10 and test_reports[-1][0] < test_reports[cur_min_val_idx][0]:
+                if epoch > 2 and test_reports[-1][0] < test_reports[cur_min_val_idx][0]:
                     cur_min_val_idx = epoch
                     model.save_weights(model_checkpoints_path)
 

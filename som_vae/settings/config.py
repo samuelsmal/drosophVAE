@@ -123,7 +123,7 @@ class RunConfig(BaseConfig):
         'd_no_compression': False,     # if true, the latent_space will be the same dimension as the input.
                                        # allowing the model to learn the identity function.
         'use_single_fly': True,
-        'data_type': DataType.POS_2D,
+        'data_type': DataType.ANGLE_3D,
         'use_time_series': True,       # triggers time series application, without this the model is only dense layers
         'time_series_length': 16,      # note that this is equal to the minimal wanted receptive field length
         'conv_layer_kernel_size': 2,   # you can set either this or `n_conv_layers` to None,

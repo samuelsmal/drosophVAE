@@ -46,8 +46,12 @@ def init(model, run_config, reset_graph=False):
 def compute_gradients(model, x, y):
     with tf.GradientTape() as tape:
         mean, var = model(x)
-        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=1))
-        loss = compute_loss_labels(encoded, y[:,-1])
+        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=-1))
+        # super crappy way of finding out if the model goes down to one time-step or not
+        if len(encoded.shape) > 2:
+            loss = compute_loss_labels(encoded[:,-1,:], y[:, -1])
+        else:
+            loss = compute_loss_labels(encoded, y[:,-1])
         return tape.gradient(loss, model.trainable_variables), loss
 
 
@@ -58,9 +62,13 @@ def compute_loss_for_data(model, data):
         #encoded = tf.nn.l2_normalize(((mean, var)))
         #loss_b = compute_loss_labels(mean, batch_y)
         mean, var = model(x)
-        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=1))
-        loss_b = compute_loss_labels(encoded, y[:,-1])
+        encoded = tf.nn.l2_normalize(tf.concat((mean, var), axis=-1))
         #loss_b = compute_loss_labels(model, batch_x, batch_y)
+
+        if len(encoded.shape) > 2:
+            loss_b = compute_loss_labels(encoded[:,-1,:], y[:, -1])
+        else:
+            loss_b = compute_loss_labels(encoded, y[:,-1])
         loss(loss_b)
 
     return (loss.result(), )

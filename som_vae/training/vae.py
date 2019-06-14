@@ -22,7 +22,8 @@ def init(input_shape, run_config, reset_graph=True):
     #    run_config['latent_dim'] = data_train.shape[-1]
 
     if reset_graph:
-        tf.reset_default_graph()
+        # probably no longer necessary as we are using Eager-mode
+        tf.compat.v1.reset_default_graph()
 
     # This is a bit shitty... but I like to run the training loop multiple times...
 
@@ -35,19 +36,16 @@ def init(input_shape, run_config, reset_graph=True):
                     'loss_weight_kl': run_config['loss_weight_kl']}
 
     if run_config['model_impl'] == ModelType.TEMP_CONV:
-        model = DrosophVAE(run_config['latent_dim'],
-                           input_shape=input_shape,
-                           batch_size=run_config['batch_size'],
-                           n_layers=run_config['n_conv_layers'],
-                           dropout_rate_temporal=run_config['dropout_rate'],
-                           loss_weight_reconstruction=run_config['loss_weight_reconstruction'],
-                           loss_weight_kl=run_config['loss_weight_kl'],
-                           use_wavenet_temporal_layer=run_config['use_time_series'])
-
+        model_config = {**model_config,
+                        'n_layers': run_config['n_conv_layers'],
+                        'dropout_rate_temporal': run_config['dropout_rate'],
+                        'use_wavenet_temporal_layer': run_config['use_time_series']}
+        model = DrosophVAE(**model_config)
         #if run_config['use_time_series']:
         #    model.temporal_conv_net.summary()
     elif run_config['model_impl'] == ModelType.PADD_CONV:
-        model = DrosophVAEConv(**{**model_config, 'with_batch_norm': run_config['with_batch_norm']})
+        model_config = {**model_config, 'with_batch_norm': run_config['with_batch_norm']}
+        model = DrosophVAEConv(**model_config)
     elif run_config['model_impl'] == ModelType.SKIP_PADD_CONV:
         model = DrosophVAESkipConv(**model_config)
     else:
@@ -57,7 +55,7 @@ def init(input_shape, run_config, reset_graph=True):
     #model.generative_net.summary(line_length=100)
 
     if run_config['optimizer'] == 'Adam':
-        optimizer = tf.train.AdamOptimizer(1e-4)
+        optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
     else:
         raise NotImplementedError
 
@@ -73,14 +71,15 @@ def init(input_shape, run_config, reset_graph=True):
             'optimizer': optimizer,
             'train_summary_writer': train_summary_writer,
             'test_summary_writer': test_summary_writer,
-            'model_checkpoints_path': model_checkpoints_path}
+            'model_checkpoints_path': model_checkpoints_path,
+            'model_config': model_config}
 
 def compute_loss_for_data(model, data):
     loss = tfe.metrics.Mean()
     recon = tfe.metrics.Mean()
     kl = tfe.metrics.Mean()
     for batch_x, _ in data:
-        loss_b, recon_b, kl_b  = compute_loss(model, batch_x, detailed=True)
+        loss_b, recon_b, kl_b = compute_loss(model, batch_x, detailed=True)
         loss(loss_b)
         recon(recon_b)
         kl(kl_b)

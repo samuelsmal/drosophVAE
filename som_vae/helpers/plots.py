@@ -1,5 +1,7 @@
+import pandas as pd
 import numpy as np
 import seaborn as sns
+from matplotlib import gridspec
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 
@@ -317,3 +319,104 @@ def plot_3d_angle_data_distribution(X_train, X_test, selected_columns, exp_desc)
     plt.subplots_adjust(top=0.84)
 
     return fig
+
+def _equalize_ylim(ax0, ax1):
+    ymin0, ymax0 = ax0.get_ylim()
+    ymin1, ymax1 = ax1.get_ylim()
+
+    min_ = min(ymin0, ymin1)
+    max_ = max(ymax0, ymax1)
+
+    ax0.set_ylim((min_, max_))
+    ax1.set_ylim((min_, max_))
+
+
+def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs):
+    fig, axs = plt.subplots(3 * 2, real.shape[2], sharex=True, figsize=(25, 10))
+
+    x_axis_values = np.arange(real.shape[0]) / SetupConfig.value('frames_per_second') / 60.
+
+    for dim in range(2):
+        for leg in range(3):
+            for limb in range(5):
+                axs[2 * leg][dim].plot(x_axis_values, real[:, limb + leg * 5, dim])
+                axs[2 * leg + 1][dim].plot(x_axis_values, reconstructed[:, limb + leg * 5, dim])
+
+    axs[0][0].set_title('x')
+    axs[0][1].set_title('y')
+
+    for leg in range(3):
+        axs[2*leg][0].set_ylabel(f"input\n{plots._get_leg_name_(leg)}")
+        axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{plots._get_leg_name_(leg)}")
+
+        #axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
+        #axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
+
+        _equalize_ylim(axs[2 * leg][0], axs[2 * leg + 1][0])
+        _equalize_ylim(axs[2 * leg][1], axs[2 * leg + 1][1])
+
+        #axs[2*leg][1].set_yticks([])
+        #axs[2*leg + 1][1].set_yticks([])
+
+    axs[0][0].legend([tp.name for tp in skeleton.tracked_points[:5]], loc='upper left')
+
+    axs[-1][0].set_xlabel('time [min]')
+    axs[-1][1].set_xlabel('time [min]')
+
+    fig.align_ylabels(axs)
+    fig.suptitle(f"Comparing input and reconstruction")
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
+    plt.savefig(figure_path)
+    return figure_path
+
+
+def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=None, run_desc=None):
+    xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
+    fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
+    for i, cn in enumerate(get_3d_columns_names(selected_columns)):
+        _idx_ = np.s_[:, i]
+        axs[i].plot(xticks, X_eval[_idx_], label='input')
+        axs[i].plot(xticks, X_hat_eval[_idx_], label='reconstructed')
+
+        axs[i].set_title(cn)
+
+    axs[-1].set_xlabel('time [min]')
+    axs[0].legend(loc='upper left')
+
+    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+    plt.suptitle(f"Comparision of selection of data\n({run_desc}_e-{epochs})")
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.94)
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
+    plt.savefig(figure_path)
+    return figure_path
+
+def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_desc, epochs):
+    cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
+    fig = plt.figure(figsize=(20, 18))
+    gs = gridspec.GridSpec(3, 2, figure=fig)
+    ax1 = plt.subplot(gs[:2, :])
+    ax2 = plt.subplot(gs[-1:, :1])
+    ax3 = plt.subplot(gs[-1:, 1:])
+
+    plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
+    plot_data['Cluster'] = cluster_assignments
+    plot_data['Class'] = y
+    plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
+    plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
+
+    sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1, palette=cluster_colors)
+    sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2, palette=cluster_colors)
+    sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3, palette=cluster_colors)
+
+    ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
+    ax2.set_title('mean')
+    ax2.legend(loc='lower left')
+    ax3.set_title('var')
+    ax3.legend(loc='lower right')
+    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_latent_space_tsne.png"
+    plt.savefig(figure_path)
+    return figure_path

@@ -1,3 +1,5 @@
+import traceback
+
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -37,7 +39,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
     #    recon_loss = tf.losses.mean_squared_error(predictions=x_logit, labels=x)
 
     # Putting more weight on the most current time epochs
-    recon_loss = tf.losses.mean_squared_error(predictions=x_logit,
+    recon_loss = tf.compat.v1.losses.mean_squared_error(predictions=x_logit,
                                           labels=x,
                                           weights=np.exp(np.linspace(0, 1, num=x.shape[1]))\
                                                     .reshape((1, x.shape[1], 1)))
@@ -54,7 +56,7 @@ def compute_loss(model, x, detailed=False, kl_nan_offset=1e-18):
         # the KL loss can explode easily, this is to prevent overflow errors
         kl = tf.reduce_mean(tf.clip_by_value(tfp.distributions.kl_divergence(p, q, allow_nan_stats=True), 0., 1e32))
     except (_NotOkStatusException, InfOrNanError) as e:
-        print('Error with KL-loss: ', e, ) #tf.reduce_mean(var))
+        print('Error with KL-loss', {traceback.format_exc()})#, e, ) #tf.reduce_mean(var))
         kl = 1.
 
     if not detailed:

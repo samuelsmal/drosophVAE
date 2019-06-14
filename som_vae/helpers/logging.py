@@ -7,8 +7,10 @@ class NoHitsFilter(logging.Filter):
         # add other fields if you need more granular comparison, depends on your app
         current_log = record.msg
         last_log = getattr(self, "last_log", "")
-
-        if 'hits is empty' in current_log:
+        print(current_log)
+        # IMAGEIO FFMPEG_WRITER WARNING: 
+        image_io_shit = 'input image is not divisible by macro_block_size'
+        if image_io_shit in current_log:
             self.hits_is_empty_counter = getattr(self, "hits_is_empty_counter", 0) + 1
 
             if getattr(self, "hits_is_empty_counter", 0) > _MAX_ALLOWED_NO_HITS_MESSAGES_:
@@ -51,6 +53,11 @@ def enable_logging(lvl=None):
     logger.addHandler(stream_handler)
 
     logger.addFilter(NoHitsFilter())
+    # something has to work... right?
+    logger.addFilter(lambda s: not re.match('.*input image is not divisible by macro_block_size.*',
+                                            s.getMessage()))
+    logger.addFilter(lambda s: not re.match('.*macro_block_size.*',
+                                            s.getMessage()))
 
     logging.info('logging enabled for level: {0}'.format(lvl))
 

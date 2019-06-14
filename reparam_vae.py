@@ -22,6 +22,7 @@ if SetupConfig.runs_on_lab_server():
 import json
 from collections import namedtuple
 from functools import partial
+import traceback
 import itertools
 import warnings
 import os
@@ -77,6 +78,7 @@ from som_vae.helpers.logging import enable_logging
 # <codecell>
 
 jupyter.fix_layout()
+enable_logging()
 
 # <markdowncell>
 
@@ -255,16 +257,35 @@ plt.legend()
 
 # <codecell>
 
-from som_vae.helpers.tensorflow import to_tf_data
+from collections import namedtuple
+from matplotlib import gridspec
+from hdbscan import HDBSCAN
+from sklearn.manifold import TSNE
+from sklearn.cluster import AgglomerativeClustering
 
+from som_vae.helpers.tensorflow import to_tf_data
 from som_vae.training import vae as vae_training
 from som_vae.training import supervised as supervised_training
+from som_vae.losses.normalized_mutual_information import normalized_mutual_information
+from som_vae.losses.purity import purity
 
-reload(vae_training)
-reload(supervised_training)
+LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
-# <codecell>
-
+def get_latent_space(model, X):
+    def _encode_(x):
+        if hasattr(model, 'encode'):
+            # normal model
+            return model.encode(x)
+        else:
+            # only encoder/inference net
+            return model(x)
+        
+    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy(), _encode_(X)))
+    else:
+        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], _encode_(X)))
+    
+    
 def _reshape_and_rescale_(X, scaler=scaler, data_type=run_cfg['data_type']):
     """To be defined in this notebook / function. Basically a larger lambda function
     """
@@ -275,169 +296,57 @@ def _reshape_and_rescale_(X, scaler=scaler, data_type=run_cfg['data_type']):
         return rescaled
     else:
         raise ValueError(f"uh, got something odd: {data_type}")
-
-# <codecell>
-
-from hdbscan import HDBSCAN
-from collections import namedtuple
-from sklearn.manifold import TSNE
-
-LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
-
-# <codecell>
-
-def get_latent_space(model, X):
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
-        return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
-    else:
-        return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
-
-from matplotlib import gridspec
-
-def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_desc, epochs):
-    cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-    fig = plt.figure(figsize=(20, 18))
-    gs = gridspec.GridSpec(3, 2, figure=fig)
-    ax1 = plt.subplot(gs[:2, :])
-    ax2 = plt.subplot(gs[-1:, :1])
-    ax3 = plt.subplot(gs[-1:, 1:])
-
-    plot_data = pd.DataFrame(X_latent_mean_tsne_proj, columns=['latent_0', 'latent_1'])
-    plot_data['Cluster'] = cluster_assignments
-    plot_data['Class'] = y
-    plot_data['mean_0'], plot_data['mean_1'] = X_latent.mean[:, 0], X_latent.mean[:, 1]
-    plot_data['var_0'], plot_data['var_1'] = X_latent.var[:, 0], X_latent.var[:, 1]
-
-    sns.scatterplot(data=plot_data, x='latent_0', y='latent_1', style='Class', hue='Cluster', ax=ax1, palette=cluster_colors)
-    sns.scatterplot(data=plot_data, x='mean_0', y='mean_1', style='Class', hue='Cluster', ax=ax2, palette=cluster_colors)
-    sns.scatterplot(data=plot_data, x='var_0', y='var_1', style='Class', hue='Cluster', ax=ax3, palette=cluster_colors)
-
-    ax1.set_title('T-SNE projection of latent space (mean & var stacked)')
-    ax2.set_title('mean')
-    ax2.legend(loc='lower left')
-    ax3.set_title('var')
-    ax3.legend(loc='lower right')
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_latent_space_tsne.png"
-    plt.savefig(figure_path)
-    return figure_path
-
-# <codecell>
-
-import pickle
-def dump_results(results, config_desc):
-    misc.create_parents(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl")
-    with open(f"{SetupConfig.value('grid_search_root_path')}/{config_desc}.pkl", 'wb') as f:
-        pickle.dump(results, f)
-
-# <codecell>
-
-from som_vae.losses import purity as P
-
-# <codecell>
-
-def _equalize_ylim(ax0, ax1):
-    ymin0, ymax0 = ax0.get_ylim()
-    ymin1, ymax1 = ax1.get_ylim()
-    
-    min_ = min(ymin0, ymin1)
-    max_ = max(ymax0, ymax1)
-    
-    ax0.set_ylim((min_, max_))
-    ax1.set_ylim((min_, max_))
-
-# <codecell>
-
-def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs):
-    fig, axs = plt.subplots(3 * 2, real.shape[2], sharex=True, figsize=(25, 10))
-    
-    x_axis_values = np.arange(real.shape[0]) / SetupConfig.value('frames_per_second') / 60.
-
-    for dim in range(2):
-        for leg in range(3):
-            for limb in range(5):
-                axs[2 * leg][dim].plot(x_axis_values, real[:, limb + leg * 5, dim])
-                axs[2 * leg + 1][dim].plot(x_axis_values, reconstructed[:, limb + leg * 5, dim])
-                
-    axs[0][0].set_title('x')
-    axs[0][1].set_title('y')
-
-    for leg in range(3):
-        axs[2*leg][0].set_ylabel(f"input\n{plots._get_leg_name_(leg)}")
-        axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{plots._get_leg_name_(leg)}")
-
-        #axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
-        #axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
         
-        _equalize_ylim(axs[2 * leg][0], axs[2 * leg + 1][0])
-        _equalize_ylim(axs[2 * leg][1], axs[2 * leg + 1][1])
-        
-        #axs[2*leg][1].set_yticks([])
-        #axs[2*leg + 1][1].set_yticks([])
-        
-    axs[0][0].legend([tp.name for tp in skeleton.tracked_points[:5]], loc='upper left')
-    
-    axs[-1][0].set_xlabel('time [min]')
-    axs[-1][1].set_xlabel('time [min]')
-
-    fig.align_ylabels(axs)
-    fig.suptitle(f"Comparing input and reconstruction")
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.9)
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
-    plt.savefig(figure_path)
-    return figure_path
+def same_experiment_same_fly(exp_0, exp_1):
+    keys_0 = experiment_key(obj=exp_0).split('-')
+    keys_1 = experiment_key(obj=exp_1).split('-')
+    return keys_0[0] == keys_1[0] and keys_0[2] == keys_1[2]
 
 # <codecell>
 
-def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selected_columns=selected_columns, run_desc=None):
-    xticks = np.arange(0, len(X_eval)) / SetupConfig.value('frames_per_second') / 60.
-    fig, axs = plt.subplots(nrows=X_eval.shape[1], ncols=1, figsize=(20, 30), sharex=True, sharey=True)
-    for i, cn in enumerate(data_loading.get_3d_columns_names(selected_columns)):
-        _idx_ = np.s_[:, i]
-        axs[i].plot(xticks, X_eval[_idx_], label='input')
-        axs[i].plot(xticks, X_hat_eval[_idx_], label='reconstructed')
-
-        axs[i].set_title(cn)
-
-    axs[-1].set_xlabel('time [min]')
-    axs[0].legend(loc='upper left')
-    
-    #plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    plt.suptitle(f"Comparision of selection of data\n({run_desc}_e-{epochs})")
-    
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.94)
-    figure_path = f"{SetupConfig.value('figures_root_path')}/{run_desc}_e-{epochs}_input_gen_recon_comparision.png"
-    plt.savefig(figure_path)
-    return figure_path
+reload(vae_training)
+reload(supervised_training)
 
 # <codecell>
 
-from som_vae.losses.normalized_mutual_information import normalized_mutual_information
-from som_vae.losses.purity import purity
-from sklearn.cluster import AgglomerativeClustering
+
+
+# <codecell>
+
+from som_vae.settings.data import Experiment, experiment_key
 
 def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
+    #
+    # Unsupervised part
+    #
+    
     model = training_results['model']
-    #train_reports = training_results['train_report']
-    #test_reports= training_results['test_report']
-
     exp_desc = run_config.description(short=False)
     exp_desc_short = run_config.description()
+    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time], data_type=run_config['data_type'])
+    epochs = len(training_results['train_reports'])
     
     if supervised:
         exp_desc_short = 'supervised' + exp_desc_short
 
-    X_hat_eval = _reshape_and_rescale_(model(X).numpy()[back_to_single_time], data_type=run_config['data_type'])
+    
+    #
+    # Reconstruction plots
+    #
     
     if run_config['data_type'] == config.DataType.ANGLE_3D:
-        plot_recon_path = plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
-                                                                   epochs=len(training_results['train_reports']), 
-                                                                   run_desc=exp_desc_short)
+        plot_recon_path = plots.plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, 
+                                                                         epochs=epochs, 
+                                                                         selected_columns=selected_columns,
+                                                                         run_desc=exp_desc_short)
     else:
-        plot_recon_path = plot_reconstruction_comparision_pos_2d(X_eval, X_hat_eval, 
-                                                                 epochs=len(training_results['train_reports']), 
+        plot_recon_path = plots.plot_reconstruction_comparision_pos_2d(X_eval, X_hat_eval, 
+                                                                 epochs=epochs, 
                                                                  run_desc=exp_desc_short)
+        
+    #
+    # Latent plot
+    #
 
     X_latent = get_latent_space(training_results['model'], X)
     X_latent_mean_tsne_proj = TSNE(n_components=2, random_state=42).fit_transform(np.hstack((X_latent.mean, X_latent.var)))
@@ -447,19 +356,27 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     cluster_assignments = AgglomerativeClustering(n_clusters=2 * len(list(config.Behavior)), linkage='average')\
         .fit_predict(np.hstack((X_latent.mean, X_latent.var)))
                                                                                       
-    plot_latent_path = plot_latent_space(X_latent,
+    plot_latent_path = plots.plot_latent_space(X_latent,
                                          X_latent_mean_tsne_proj,
                                          np.array([y.label.name for _, y in y_frames[back_to_single_time]]),
                                          cluster_assignments,
                                          exp_desc_short,
                                          epochs=len(training_results['train_reports']))
-                
+    
+    #
+    # Videos
+    #
     group_videos = list(video.group_video_of_clusters(cluster_assignments,
                                                       y_frames[back_to_single_time],
                                                       exp_desc_short, 
-                                                      epochs=len(training_results['train_reports'])))
+                                                      epochs=epochs))
+    
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
+    
+    #
+    # Single video of Hubert, the special fly
+    #
 
     hubert = Experiment(**SetupConfig.value('hubert'))
     hubert_idx = np.array([same_experiment_same_fly(l, hubert) for l in y_frames[back_to_single_time][:, 1]])
@@ -472,14 +389,34 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     paths = [video._path_for_image_(image_id, label) for image_id, label in image_id_with_exp]
 
     labels = [l.label.name for l in y_frames[back_to_single_time][hubert_idx, 1]]
-    mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
-    X_hat_eval = (X_hat_eval *std_) + mean_
+    
+    if run_config['data_type'] == config.DataType.POS_2D:
+        mean_, std_ = normalisation_factors[experiment_key(obj=hubert)]
+        X_hat_eval = (X_hat_eval *std_) + mean_
 
-    X_raw_input = (frame_data.reshape(-1, 15, 2) * std_) + mean_
-    X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)]
-    X_hat_eval = np.clip(X_hat_eval, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
+        X_raw_input = (frame_data.reshape(-1, 15, 2) * std_) + mean_
+        X_raw_input = X_raw_input[y_frames[back_to_single_time][:, 0].astype(np.int)]
+        X_hat_eval = np.clip(X_hat_eval, np.min(X_raw_input), np.max(X_raw_input)) # some odd errors otherwise
 
-    full_video_path = comparision_video_of_reconstruction((X_raw_input, X_hat_eval), cluster_assignments, image_id_with_exp, labels, n_train_data_points, paths, run_desc=exp_desc_short)
+        full_video_path = video.comparision_video_of_reconstruction((X_raw_input, X_hat_eval), 
+                                                                    cluster_assignments,
+                                                                    image_id_with_exp,
+                                                                    labels,
+                                                                    n_train_data_points,
+                                                                    paths,
+                                                                    epochs=epochs,
+                                                                    run_desc=exp_desc_short)
+    else:
+        full_video_path = video.comparision_video_of_reconstruction([],
+                                                                    cluster_assignments,
+                                                                    image_id_with_exp,
+                                                                    labels,
+                                                                    n_train_data_points,
+                                                                    paths,
+                                                                    epochs=epochs,
+                                                                    run_desc=exp_desc_short)
+        
+    
 
     return {'latent_projection': X_latent_mean_tsne_proj, 
             'cluster_assignments': cluster_assignments,
@@ -522,34 +459,33 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
         # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
         vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
         vae_training_results = {}
-        eval_results = []
-        for u in range(np.int(epochs / eval_steps)):
-            try:
-                vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                                          train_dataset=train_dataset, 
-                                                          test_dataset=test_dataset,
-                                                          early_stopping=False,
-                                                          n_epochs=eval_steps)
+        vae_eval_results = []
+        
+        try:
+            for u in range(np.int(epochs / eval_steps)):
+                    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                              train_dataset=train_dataset, 
+                                                              test_dataset=test_dataset,
+                                                              early_stopping=False,
+                                                              n_epochs=eval_steps)
 
-                eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
-            except Exception as e:
-                print(f"problem with {vae_training_args}: {e}")
-            #for n, p in eval_results[-1]['plot_paths'].items():
-            #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
-        
-        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
-        
+                    vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+                #for n, p in vae_eval_results[-1]['plot_paths'].items():
+                #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
+
+            vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+        except Exception:
+            print(f"problem with {vae_training_args}: {traceback.format_exc()}")
+            
         #
         # Supervised part
         # 
         
         # the training process saves the model with the min loss.
-        base_mdl = vae_training_results['model'].__class__(latent_dim=run_cfg['latent_dim'], 
-                                                           input_shape=X_train.shape[1:],
-                                                           batch_size=run_cfg['batch_size'])
+        base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
         base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
-        supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=run_cfg)
+        supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
         supervised_training_results = {}
         supervised_eval_results = []
 
@@ -559,44 +495,61 @@ def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_s
                                                       test_dataset=test_dataset,
                                                       early_stopping=False,
                                                       n_epochs=eval_steps)
+            
+            base_mdl.inference_net = supervised_training_results['model']
+            supervised_training_results['model'] = base_mdl 
+            supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+            supervised_training_results['model'] = base_mdl.inference_net
 
         base_mdl.inference_net = supervised_training_results['model']
         supervised_training_results['model'] = base_mdl 
-
-        eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)
+        supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+        supervised_training_results['model'] = base_mdl.inference_net
         
-        yield p, 
-            vae_training_results['train_reports'], 
-            vae_training_results['test_reports'],
-            vae_training_args['model_checkpoints_path'],
-            eval_results,
-            supervised_training_results['train_reports'],
-            supervised_training_results['test_reports'],
-            supervised_training_args['model_checkpoints_path']
+        yield (p, 
+               vae_training_results['train_reports'], 
+               vae_training_results['test_reports'],
+               vae_training_args['model_checkpoints_path'],
+               vae_eval_results,
+               supervised_training_results['train_reports'],
+               supervised_training_results['test_reports'],
+               supervised_training_args['model_checkpoints_path'],
+               supervised_eval_results)
+
+# <codecell>
+
+reload(video)
+
+# <codecell>
+
+from som_vae.models import DrosophVAE
 
 # <codecell>
 
 from datetime import datetime
+# Note that the data will be reused -> Don't adapt the data_type here. 
+# Either include the data loading into the grid-search or make two runs, one for each DataType
+
 grid_search_params = {
-    'data_type': [config.DataType.ANGLE_3D], # config.DataType.values(),
-    'model_impl':  config.ModelType.values(),
+    'model_impl': [config.ModelType.TEMP_CONV], # config.ModelType.values(),
     'latent_dim': [1, 2, 4,]
 }
 
-if SetupConfig.runs_on_lab_server():
-    started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
-    grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
-    dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
-
-# <codecell>
-
-#grid_search_results = list(grid_search(grid_search_params, eval_steps=2, epochs=5))
-#dump_results(grid_search_results, 'grid_search_only_vae')
+with warnings.catch_warnings():
+    warnings.simplefilter(action='ignore', category=FutureWarning)
+    if SetupConfig.runs_on_lab_server():
+        started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
+        grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
+        misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
+    else:
+        grid_search_results = list(grid_search(grid_search_params, eval_steps=3, epochs=4))
+        misc.dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
 reload(tf_helpers)
 reload(vae_training)
+reload(video)
 
 # <codecell>
 
@@ -621,6 +574,87 @@ if not SetupConfig.runs_on_lab_server():
 
 # <codecell>
 
+reload(supervised_training)
+
+cfg = RunConfig(model_impl=config.ModelType.TEMP_CONV, latent_dim=1)
+vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+vae_training_results = {}
+vae_eval_results = []
+epochs = 14
+eval_steps = 7
+
+try:
+    for u in range(np.int(epochs / eval_steps)):
+            vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                      train_dataset=train_dataset, 
+                                                      test_dataset=test_dataset,
+                                                      early_stopping=False,
+                                                      n_epochs=eval_steps)
+
+            vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+        #for n, p in vae_eval_results[-1]['plot_paths'].items():
+        #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
+
+    vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+except Exception:
+    print(f"problem with {vae_training_args}: {traceback.format_exc()}")
+
+
+# the training process saves the model with the min loss.
+base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
+base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
+supervised_training_results = {}
+supervised_eval_results = []
+
+for u in range(np.int(epochs / eval_steps)):
+    supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
+                                              train_dataset=train_dataset, 
+                                              test_dataset=test_dataset,
+                                              early_stopping=False,
+                                              n_epochs=eval_steps)
+
+    base_mdl.inference_net = supervised_training_results['model']
+    supervised_training_results['model'] = base_mdl 
+    supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+    supervised_training_results['model'] = base_mdl.inference_net
+
+base_mdl.inference_net = supervised_training_results['model']
+supervised_training_results['model'] = base_mdl 
+supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+supervised_training_results['model'] = base_mdl.inference_net
+
+# <codecell>
+
+X[back_to_single_time].shape
+
+# <codecell>
+
+supervised_training_args['model'](X)
+
+# <codecell>
+
+X.shape
+
+# <codecell>
+
+get_latent_space(supervised_training_results['model'], X)
+#     17         return LatentSpaceEncoding(*map(lambda x: x.numpy(), model.encode(X)))
+#     18     else:
+#---> 19         return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], model.encode(X)))
+
+# <codecell>
+
+a = tf.zeros((128, 16, 4))
+b = tf.zeros((128, 16, 4))
+
+# <codecell>
+
+tf.concat((a, b), axis=-1).shape
+
+# <codecell>
+
 eval_results
 
 # <codecell>
@@ -642,10 +676,7 @@ from PIL import Image
 
 # <codecell>
 
-def same_experiment_same_fly(exp_0, exp_1):
-    keys_0 = experiment_key(obj=exp_0).split('-')
-    keys_1 = experiment_key(obj=exp_1).split('-')
-    return keys_0[0] == keys_1[0] and keys_0[2] == keys_1[2]
+
 
 # <codecell>
 

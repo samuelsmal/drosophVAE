@@ -1,3 +1,4 @@
+import warnings
 from itertools import groupby
 import pathlib
 import logging
@@ -10,7 +11,7 @@ import colorsys
 import seaborn as sns
 
 from PIL import Image
-from som_vae.helpers.misc import flatten
+from som_vae.helpers.misc import flatten, is_file
 from som_vae.settings import config, skeleton, data
 from som_vae.settings.config import SetupConfig
 
@@ -125,7 +126,9 @@ def _save_frames_(file_path, frames, format='mp4', **kwargs):
         _kwargs = {'fps': 24}
 
     pathlib.Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-    imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='IMAGEIO FFMPEG_WRITER WARNING: input image is not divisible by macro_block_size=16')
+        imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
 
 
 def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
@@ -148,7 +151,8 @@ def _float_to_int_color_(colors):
     return (np.array(colors) * 255).astype(np.int).tolist()
 
 def comparision_video_of_reconstruction(positional_data, cluster_assignments, image_id_with_exp, labels,
-                                        n_train_data_points, images_paths, cluster_colors=None, run_desc=None):
+                                        n_train_data_points, images_paths, cluster_colors=None,
+                                        run_desc=None, epochs=None):
     """Creates a video (saved as a gif) with the embedding overlay, displayed as an int.
 
     Args:
@@ -172,7 +176,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
     if cluster_colors is None:
         cluster_colors = dict(zip(cluster_ids, _float_to_int_color_(sns.color_palette(palette='bright', n_colors=len(cluster_ids)))))
 
-    n_frames = positional_data[0].shape[0]
+    n_frames = len(images_paths)
     image_height, image_width, _ = cv2.imread(images_paths[0]).shape
     lines_pos = ((np.array(range(n_frames)) / n_frames) * image_width).astype(np.int).tolist()
 
@@ -207,7 +211,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
         # experiment id
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text=experiment_key(obj=image_id_with_exp[frame_id][1]),
+                        text=data.experiment_key(obj=image_id_with_exp[frame_id][1]),
                         org=(0, 20),
                         color=(255, 255, 255))
 
@@ -236,7 +240,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
 
         return f
 
-    frames = (pipeline(frame_id, cv2.imread(path)) for frame_id, path in enumerate(images_paths) if misc.is_file(path))
+    frames = (pipeline(frame_id, cv2.imread(path)) for frame_id, path in enumerate(images_paths) if is_file(path))
 
     output_path = f"{SetupConfig.value('video_root_path')}/{run_desc}_e-{epochs}_hubert_full.mp4"
     _save_frames_(output_path, frames, format='mp4')
