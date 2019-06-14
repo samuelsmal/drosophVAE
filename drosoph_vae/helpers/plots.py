@@ -346,8 +346,8 @@ def plot_reconstruction_comparision_pos_2d(real, reconstructed, run_desc, epochs
     axs[0][1].set_title('y')
 
     for leg in range(3):
-        axs[2*leg][0].set_ylabel(f"input\n{plots._get_leg_name_(leg)}")
-        axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{plots._get_leg_name_(leg)}")
+        axs[2*leg][0].set_ylabel(f"input\n{_get_leg_name_(leg)}")
+        axs[2*leg + 1][0].set_ylabel(f"reconstructed\n{_get_leg_name_(leg)}")
 
         #axs[2*leg][0].get_shared_y_axes().join(axs[2*leg][0], axs[2*leg + 1][0])
         #axs[2*leg][1].get_shared_y_axes().join(axs[2*leg][1], axs[2*leg + 1][1])
@@ -396,7 +396,7 @@ def plot_reconstruction_comparision_angle_3d(X_eval, X_hat_eval, epochs, selecte
 
 def plot_latent_space(X_latent, X_latent_mean_tsne_proj, y, cluster_assignments, run_desc, epochs):
     cluster_colors = sns.color_palette(n_colors=len(np.unique(cluster_assignments)))
-    fig = plt.figure(figsize=(20, 18))
+    fig = plt.figure(figsize=(15, 12))
     gs = gridspec.GridSpec(3, 2, figure=fig)
     ax1 = plt.subplot(gs[:2, :])
     ax2 = plt.subplot(gs[-1:, :1])

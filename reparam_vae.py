@@ -554,16 +554,13 @@ with warnings.catch_warnings():
         grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
     else:
-        grid_search_params = {
-            'model_impl': [config.ModelType.TEMP_CONV], # config.ModelType.values(),
-            'latent_dim': [2, ]
-        }
-        grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
-        misc.dump_results(grid_search_results, 'grid_search_only_vae')
-
-# <codecell>
-
-stop
+        pass
+        #grid_search_params = {
+        #    'model_impl': [config.ModelType.SKIPP_PADD_CONV], # config.ModelType.values(),
+        #    'latent_dim': [2, ]
+        #}
+        #grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
+        #misc.dump_results(grid_search_results, 'grid_search_only_vae')
 
 # <codecell>
 
@@ -573,30 +570,30 @@ reload(video)
 
 # <codecell>
 
-if not SetupConfig.runs_on_lab_server():
-    reload(vae_training)
-    epochs = 14
-    eval_steps = 7
-    run_cfg['latent_dim'] = 6
-    vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
-    vae_training_results = {}
-    eval_results = []
-    for u in range(np.int(epochs / eval_steps)):
-        vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                                  train_dataset=train_dataset, 
-                                                  test_dataset=test_dataset,
-                                                  early_stopping=False,
-                                                  n_epochs=eval_steps)
-
-        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
-
-    eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
+#if not SetupConfig.runs_on_lab_server():
+#    reload(vae_training)
+#    epochs = 14
+#    eval_steps = 7
+#    run_cfg['latent_dim'] = 6
+#    vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=run_cfg)
+#    vae_training_results = {}
+#    eval_results = []
+#    for u in range(np.int(epochs / eval_steps)):
+#        vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+#                                                  train_dataset=train_dataset, 
+#                                                  test_dataset=test_dataset,
+#                                                  early_stopping=False,
+#                                                  n_epochs=eval_steps)
+#
+#        eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
+#
+#    eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, run_cfg)]
 
 # <codecell>
 
 reload(supervised_training)
 
-cfg = RunConfig(model_impl=config.ModelType.TEMP_CONV, latent_dim=1)
+cfg = RunConfig(model_impl=config.ModelType.SKIP_PADD_CONV, latent_dim=1)
 vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
 vae_training_results = {}
 vae_eval_results = []
@@ -644,6 +641,10 @@ base_mdl.inference_net = supervised_training_results['model']
 supervised_training_results['model'] = base_mdl 
 supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
 supervised_training_results['model'] = base_mdl.inference_net
+
+# <codecell>
+
+base_mdl.inference_net.layers[1].summary()
 
 # <codecell>
 

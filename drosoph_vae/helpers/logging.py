@@ -55,14 +55,10 @@ def enable_logging(lvl=None):
     # logger.addHandler(file_handler)
     logger.addHandler(stream_handler)
 
-    logger.addFilter(NoHitsFilter())
+    #logger.addFilter(NoHitsFilter())
     logger.addFilter(NoParsingFilter())
 
     # something has to work... right?
-    logger.addFilter(lambda s: not re.match('.*input image is not divisible by macro_block_size.*',
-                                            s.getMessage()))
-    logger.addFilter(lambda s: not re.match('.*macro_block_size.*',
-                                            s.getMessage()))
 
     logging.info('logging enabled for level: {0}'.format(lvl))
 

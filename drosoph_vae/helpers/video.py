@@ -131,12 +131,12 @@ def _save_frames_(file_path, frames, format='mp4', **kwargs):
         imageio.mimsave(file_path, frames, format=format, **{**_kwargs, **kwargs})
 
 
-def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None):
+def _add_frame_and_embedding_id_(frame, emb_id=None, frame_id=None, color=None):
     params = {"org": (0, frame.shape[0] // 2),
               "fontFace": 1,
-              "fontScale": 2,
-              "color": (255, 255, 255),
-              "thickness": 2}
+              "fontScale": 1,
+              "color": color,
+              "thickness": 1}
 
     if emb_id is not None:
        frame = cv2.putText(img=np.copy(frame), text=f"cluster_id: {emb_id:0>3}", **params)
@@ -186,7 +186,8 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
     _colors_for_pos_data = [lighten_int_colors(skeleton.colors, amount=v) for v in np.linspace(1, 0.3, len(positional_data))]
 
     def pipeline(frame_id, frame):
-        f = _add_frame_and_embedding_id_(frame, cluster_assignments[frame_id], frame_id)
+        f = _add_frame_and_embedding_id_(frame, cluster_assignments[frame_id], frame_id,
+                                         color=cluster_colors[cluster_assignments[frame_id]])
 
         # xs are the multiple positional data to plot
         for x_i, x in enumerate(positional_data):
@@ -223,11 +224,17 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
         #                org=(_text_size[0], 20),
         #                color=(255, 255, 255))
 
-        # model experiment description
+        # class label
         f = cv2.putText(**text_default_args,
                         img=f,
                         text=labels[frame_id],
                         org=(0, 40),
+                        color=(255, 255, 255))
+
+        f = cv2.putText(**text_default_args,
+                        img=f,
+                        text=exp_desc,
+                        org=(0, 60),
                         color=(255, 255, 255))
 
         # cluster assignment bar
