@@ -44,8 +44,8 @@ def init(input_shape, run_config, reset_graph=True):
                            loss_weight_kl=run_config['loss_weight_kl'],
                            use_wavenet_temporal_layer=run_config['use_time_series'])
 
-        if run_config['use_time_series']:
-            model.temporal_conv_net.summary()
+        #if run_config['use_time_series']:
+        #    model.temporal_conv_net.summary()
     elif run_config['model_impl'] == ModelType.PADD_CONV:
         model = DrosophVAEConv(**{**model_config, 'with_batch_norm': run_config['with_batch_norm']})
     elif run_config['model_impl'] == ModelType.SKIP_PADD_CONV:
