@@ -303,7 +303,7 @@ reload(supervised_training)
 
 # <codecell>
 
-from sklearn.metrics import adjusted_mutual_info_score, homogeneity_score, silhouette_score
+from sklearn.metrics import adjusted_mutual_info_score, homogeneity_score, silhouette_score, normalized_mutual_info_score
 from drosoph_vae.settings.data import Experiment, experiment_key
 
 def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
@@ -367,6 +367,7 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     silhouette = silhouette_score(np.hstack((X_latent.mean, X_latent.var)), y[:, -1])
     adjusted_mutual_info = adjusted_mutual_info_score(y[:, -1], cluster_assignments)
     homogeneity = homogeneity_score(y[:, -1], cluster_assignments)
+    mutual_info = normalized_mutual_info_score(y[:, -1], cluster_assignments)
     
     #
     # Single video of Hubert, the special fly
@@ -420,7 +421,8 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
             'scores': {
                 'silhouette': silhouette,
                 'adjusted_mutual_info': adjusted_mutual_info,
-                'homogeneity': homogeneity
+                'homogeneity': homogeneity,
+                'mutual_info': mutual_info
             }
            }
 
@@ -587,7 +589,72 @@ with warnings.catch_warnings():
 
 # <codecell>
 
-grid_search_results
+len(grid_search_results)
+
+# <codecell>
+
+_t =[[er['scores'] for er in gsr['vae']['eval_results']] for gsr in grid_search_results]
+
+# <codecell>
+
+_t
+
+# <codecell>
+
+pd.DataFrame(_t[0]).plot()
+
+# <codecell>
+
+def _extract_(res):
+    return (res['train_reports'], res['test_reports'])
+
+
+
+# <codecell>
+
+grid_search_params_as_list = list(product(grid_search_params))
+
+# <codecell>
+
+grid_search_params_as_list
+
+# <codecell>
+
+# plot_data = [parameters, train_reports, test_reports]
+plot_data = [(res['parameters'], *_extract_(res['vae'])) for res in grid_search_results]
+losses = ['loss', 'reconstruction', 'kl-divergence']
+fig, axs = plt.subplots(nrows=3, ncols=1, figsize=(10, 8))
+for params, train_losses, test_losses in plot_data:
+    for i, l in enumerate(losses):
+        axs[i].plot(train_losses[:, i], label=f"train {l}")
+        axs[i].plot(test_losses[:, i], label=f"test {l}")
+        
+for a in axs:
+    a.legend()
+
+# <codecell>
+
+# plot_data = [parameters, train_reports, test_reports]
+plot_data = [(res['parameters'], *_extract_(res['supervised'])) for res in grid_search_results]
+losses = ['triplet loss']
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 3))
+for params, train_losses, test_losses in plot_data:
+    ax.plot(train_losses, label=f"train triplet loss")
+    ax.plot(test_losses, label=f"test triplet loss")
+        
+plt.legend()
+
+# <codecell>
+
+stop
+
+# <codecell>
+
+grid_search_results[0]['vae']['eval_results'][0]['scores']
+
+# <codecell>
+
+len(grid_search_results[0]['vae']['eval_results'])
 
 # <codecell>
 

@@ -88,10 +88,10 @@ class SetupConfig(BaseConfig):
         super(BaseConfig, self).__init__({**SetupConfig.DEFAULT_VALUES, **kwargs})
 
         if self['debug'] and not SetupConfig.runs_on_lab_server():
-            self['training'] = {'vae': {'n_epochs': 5,
-                                        'n_epochs_eval': 4},
+            self['training'] = {'vae': {'n_epochs': 6,
+                                        'n_epochs_eval': 2},
                                 'supervised': {'n_epochs': 3,
-                                               'n_epochs_eval': 2}}
+                                               'n_epochs_eval': 1}}
 
         # host specific location for data
         if get_hostname() == 'upramdyapc6':
