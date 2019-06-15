@@ -206,7 +206,7 @@ class RunConfig(BaseConfig):
                 **(self['preprocessing'][self['data_type']])}
 
 
-    def description(self, short=True, verbosity=4):
+    def description(self, short=True, verbosity=6):
         def _bool_(v):
             return 'T' if self[v] else 'F'
 
@@ -221,6 +221,8 @@ class RunConfig(BaseConfig):
             ('data', '', self['data_type'].name),
             ('time', 't', self['time_series_length'] if self['use_time_series'] else 'F'),
             ('latent_dim', 'ld', self['latent_dim']),
+            ('vae_learning_rate', 'vlr', self['vae_learning_rate']),
+            ('supervised_learning_rate', 'slr', self['supervised_learning_rate']),
             ('use_single_fly', 'mf', _bool_('use_single_fly')),
             ('loss_weight_recon', 'lwr', self.get('loss_weight_reconstruction')),
             ('loss_weight_kl', 'lwkl', self.get('loss_weight_kl')),

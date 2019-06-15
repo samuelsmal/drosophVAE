@@ -61,7 +61,7 @@ def init(input_shape, run_config, reset_graph=True):
 
     model_created_at = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_config['model_created_at'] = model_created_at
-    cfg_description = run_config.description(verbosity=5)
+    cfg_description = run_config.description()
     base_path = f"{SetupConfig.value('data_root_path')}/tvae_logs/{cfg_description}"
     model_checkpoints_path = f"{SetupConfig.value('data_root_path')}/models/{cfg_description}/checkpoint"
     train_summary_writer = tfc.summary.create_file_writer(base_path + '/train')
