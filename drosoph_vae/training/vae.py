@@ -55,7 +55,7 @@ def init(input_shape, run_config, reset_graph=True):
     #model.generative_net.summary(line_length=100)
 
     if run_config['optimizer'] == 'Adam':
-        optimizer = tf.compat.v1.train.AdamOptimizer(1e-4)
+        optimizer = tf.compat.v1.train.AdamOptimizer(run_config['vae_learning_rate'])
     else:
         raise NotImplementedError
 

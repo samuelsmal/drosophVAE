@@ -233,7 +233,7 @@ def comparision_video_of_reconstruction(positional_data, cluster_assignments, im
 
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text=exp_desc,
+                        text=run_desc,
                         org=(0, 60),
                         color=(255, 255, 255))
 
@@ -306,9 +306,9 @@ def combine_images_h(img1, img2):
 
 
 
-def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None, exp_desc=None, as_frames=False):
+def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to_visualize=None, cluster_colors=None, run_desc=None, as_frames=False):
     """
-    exp_desc refers to the model experimnt id, not fly-experiment
+    run_desc refers to the model experimnt id, not fly-experiment
 
 
     ... in general stuff in here sucks... big time...
@@ -357,7 +357,7 @@ def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to
         # model experiment description
         f = cv2.putText(**text_default_args,
                         img=f,
-                        text=exp_desc,
+                        text=run_desc,
                         org=(0, 40),
                         color=(255, 255, 255))
 
@@ -382,7 +382,7 @@ def video_angle(cluster_assignments, images_paths_for_experiments, cluster_id_to
     if as_frames:
         return frames
     else:
-        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=exp_desc, vid_id=cluster_id_to_visualize or 'all')
+        output_path = config.EXPERIMENT_VIDEO_PATH.format(experiment_id=run_desc, vid_id=cluster_id_to_visualize or 'all')
         _save_frames_(output_path, frames, format='mp4')
 
         return output_path

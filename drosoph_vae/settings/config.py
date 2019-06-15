@@ -54,7 +54,9 @@ class BaseConfig(dict):
 ####################################################
 
 class SetupConfig(BaseConfig):
+    # some values are "dynamic" constants, see __init__ method
     DEFAULT_VALUES = {
+        'debug': True,
         'frames_per_second': 100,
         'legs': [0, 1, 2], # no longer in use
         'camera_of_interest': 1,
@@ -65,17 +67,31 @@ class SetupConfig(BaseConfig):
         'fly_black_list': ['180920_aDN_PR-Fly2-005_SG1',
                            '180921_aDN_CsCh-Fly6-003_SG1'], # for those flys the angle conversion give odd results,
                                                            # and their distributions seem way off compared to the others)
-        'data_root_path': None,
-        'experiment_root_path': None,
         'hubert': { # there can only be one. hubert is the fly with which I started, use him to debug stuff
             'study_id': '180920_aDN_CsCh',
             'experiment_id': '001_SG1',
             'fly_id': 'Fly2',
         },
+        'training': {
+            'vae': {
+                'n_epochs': 200,
+                'n_epochs_eval': 25,
+            },
+            'supervised': {
+                'n_epochs': 50,
+                'n_epochs_eval': 5,
+            }
+         },
     }
 
     def __init__(self, **kwargs):
         super(BaseConfig, self).__init__({**SetupConfig.DEFAULT_VALUES, **kwargs})
+
+        if self['debug'] and not SetupConfig.runs_on_lab_server():
+            self['training'] = {'vae': {'n_epochs': 5,
+                                        'n_epochs_eval': 4},
+                                'supervised': {'n_epochs': 3,
+                                               'n_epochs_eval': 2}}
 
         # host specific location for data
         if get_hostname() == 'upramdyapc6':
@@ -105,16 +121,17 @@ class SetupConfig(BaseConfig):
         return get_hostname() == 'upramdyapc6'
 
 
-###############################################[MaF##
+#################################################
 #                                               #
-# Run config, model definition, hyperparameters #F
-#                                               #[MaF
+# Run config, model definition, hyperparameters #
+#                                               #
 #################################################
 
 # Note that not all variables will be used by all models
 
 
 class RunConfig(BaseConfig):
+    # some values are "dynamic" constants, see __init__ method
     DEFAULT_VALUES = {
         'debug': False,                 # general flag for debug mode, triggers all `d_.*`-options.
         'd_zero_data': False,          # overwrite the data with zeroed out data, the overall shape is kept.
@@ -141,20 +158,21 @@ class RunConfig(BaseConfig):
         'model_impl': ModelType.SKIP_PADD_CONV,
         'optimizer': 'Adam',
         'train_test_ratio': 0.7,
-        'angle_3d_params': {
-            'preprocessing': {
-                'low_variance_cutoff': 0.,
+        'preprocessing': {
+            'common': {
                 'blacklist_behavior': [Behavior.REST, Behavior.NONE],
+            },
+            DataType.ANGLE_3D: {
+                'low_variance_cutoff': 0.,
                 'normalize_features': False
+            },
+            DataType.POS_2D: {
+                'normalize_for_each_experiment': True,
             }
         },
-        'pos_2d_params': {
-            'preprocessing': {
-                'normalize_for_each_experiment': True
-            },
-        },
         'model_created_at': None,
-        'supervised_learning_rate': 0.00005
+        'vae_learning_rate': 1e-4,
+        'supervised_learning_rate': 1e-5,
     }
 
     def __init__(self, **kwargs):
@@ -182,6 +200,11 @@ class RunConfig(BaseConfig):
             self['latent_dim'] = 4
         else:
             raise ValueError(f"this data_type is not supported: {self['data_type']}")
+
+    def preprocessing_parameters(self):
+        return {**self.value('preprocessing', 'common'),
+                **(self['preprocessing'][self['data_type']])}
+
 
     def description(self, short=True, verbosity=4):
         def _bool_(v):

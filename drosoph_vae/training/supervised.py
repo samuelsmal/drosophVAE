@@ -24,8 +24,6 @@ def init(model, run_config, reset_graph=False):
     if reset_graph:
         tf.reset_default_graph()
 
-    #optimizer = tf.train.AdadeltaOptimizer(1e-4)
-
     if run_config['optimizer'] == 'Adam':
         optimizer = tf.compat.v1.train.AdamOptimizer(run_config['supervised_learning_rate'])
     else:

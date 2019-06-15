@@ -22,24 +22,27 @@ if SetupConfig.runs_on_lab_server():
 import json
 from collections import namedtuple
 from functools import partial
-import traceback
 import itertools
+from functional import seq
+from functools import reduce
 import warnings
 import os
+import traceback
 import time
-import numpy as np
-import pandas as pd
 import glob
 import matplotlib.pyplot as plt
+from matplotlib import gridspec
 import seaborn as sns
+import numpy as np
+import pandas as pd
 import PIL
 import imageio
 from IPython import display
+from pathlib import Path
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.manifold import TSNE
-from functional import seq
-from pathlib import Path
-from functools import reduce
+from sklearn.cluster import AgglomerativeClustering
+from hdbscan import HDBSCAN
 
 from importlib import reload # for debugging and developing, optional
 
@@ -63,17 +66,23 @@ import drosoph_vae.helpers.tensorflow as tf_helpers
 sess = tf.InteractiveSession(config=_TF_DEFAULT_SESSION_CONFIG_)
 tf.keras.backend.set_session(sess)
 
-from drosoph_vae.settings.config import SetupConfig, RunConfig
 from drosoph_vae import data_loading
 from drosoph_vae import settings
 from drosoph_vae import preprocessing
+from drosoph_vae.helpers import video, plots, misc, jupyter
 from drosoph_vae.helpers.misc import extract_args, chunks, foldl, if_last
-from drosoph_vae.helpers.jupyter import fix_layout, display_video
+from drosoph_vae.helpers.jupyter import display_video
+from drosoph_vae.helpers.logging import enable_logging
+from drosoph_vae.helpers.tensorflow import to_tf_data
 from drosoph_vae.settings import config, skeleton
 from drosoph_vae.settings import data as SD
-from drosoph_vae.helpers import video, plots, misc, jupyter
-from drosoph_vae import preprocessing
-from drosoph_vae.helpers.logging import enable_logging
+from drosoph_vae.settings.config import RunConfig, SetupConfig
+from drosoph_vae.training import vae as vae_training
+from drosoph_vae.training import supervised as supervised_training
+from drosoph_vae.losses.normalized_mutual_information import normalized_mutual_information
+from drosoph_vae.losses.purity import purity
+from drosoph_vae.models.drosoph_vae_conv import DrosophVAEConv
+from drosoph_vae.models.drosoph_vae_skip_conv import DrosophVAESkipConv
 
 # <codecell>
 
@@ -104,9 +113,10 @@ def to_int_value(frame_with_label):
 
 if run_cfg['data_type'] == config.DataType.ANGLE_3D:
     frame_data, frame_labels, selected_columns, normalisation_factors = preprocessing.preprocess_angle_3d_data(
-        frame_data, frame_labels, **run_cfg.value('angle_3d_params', 'preprocessing'))
+        frame_data, frame_labels, **run_cfg.preprocessing_parameters())
 if run_cfg['data_type'] == config.DataType.POS_2D:
     selected_columns = None
+    # preprocessing for the pos_2d data happens inside the loading function, yeah... I know ugly
     frame_data, frame_labels = preprocessing.preprocess_pos_2d_data(frame_data, frame_labels)
 
 # <codecell>
@@ -166,10 +176,6 @@ if run_cfg['use_time_series']:
 #    else:
 #        reshaped_joint_position = _dummy_data_
 #        labels = _dummy_labels_
-
-# <codecell>
-
-run_cfg.description(short=True)
 
 # <codecell>
 
@@ -257,18 +263,6 @@ plt.legend()
 
 # <codecell>
 
-from collections import namedtuple
-from matplotlib import gridspec
-from hdbscan import HDBSCAN
-from sklearn.manifold import TSNE
-from sklearn.cluster import AgglomerativeClustering
-
-from drosoph_vae.helpers.tensorflow import to_tf_data
-from drosoph_vae.training import vae as vae_training
-from drosoph_vae.training import supervised as supervised_training
-from drosoph_vae.losses.normalized_mutual_information import normalized_mutual_information
-from drosoph_vae.losses.purity import purity
-
 LatentSpaceEncoding = namedtuple('LatentSpaceEncoding', 'mean var')
 
 def get_latent_space(model, X):
@@ -280,7 +274,7 @@ def get_latent_space(model, X):
             # only encoder/inference net
             return model(x)
         
-    if model._name in ['drosoph_vae_conv', 'drosoph_vae_skip_conv']:
+    if model.__class__ in [DrosophVAEConv, DrosophVAESkipConv]:
         return LatentSpaceEncoding(*map(lambda x: x.numpy(), _encode_(X)))
     else:
         return LatentSpaceEncoding(*map(lambda x: x.numpy()[back_to_single_time], _encode_(X)))
@@ -309,10 +303,7 @@ reload(supervised_training)
 
 # <codecell>
 
-
-
-# <codecell>
-
+from sklearn.metrics import adjusted_mutual_info_score, homogeneity_score, silhouette_score
 from drosoph_vae.settings.data import Experiment, experiment_key
 
 def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
@@ -373,9 +364,13 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     
     #nmi = normalized_mutual_information(cluster_assignments, y)
     #pur = purity(cluster_assignments, y)
+    silhouette = silhouette_score(np.hstack((X_latent.mean, X_latent.var)), y[:, -1])
+    adjusted_mutual_info = adjusted_mutual_info_score(y[:, -1], cluster_assignments)
+    homogeneity = homogeneity_score(y[:, -1], cluster_assignments)
     
     #
     # Single video of Hubert, the special fly
+    # NOTE that the data is altered here
     #
 
     hubert = Experiment(**SetupConfig.value('hubert'))
@@ -422,6 +417,11 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
             'cluster_assignments': cluster_assignments,
             'plot_paths': {'reconstruction': plot_recon_path, 'latent': plot_latent_path},
             'video_paths': {'groups': group_videos, 'hubert': full_video_path},
+            'scores': {
+                'silhouette': silhouette,
+                'adjusted_mutual_info': adjusted_mutual_info,
+                'homogeneity': homogeneity
+            }
            }
 
 # <codecell>
@@ -444,84 +444,105 @@ X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 from itertools import product
 
-def grid_search(grid_search_params, eval_steps=25, epochs=150, supervised_eval_steps=1, supervised_epochs=5):
+def grid_search(grid_search_params):
     parameters = product(*grid_search_params.values())
+    # it's important that it is a generator, tensorflow might complain overwise 
+    # too many writers and such, depends heavily on the computer
     cfgs = ((p, config.RunConfig(**dict(zip(grid_search_params.keys(), p)))) for p in parameters)
-
+    
+    vae_n_epochs = SetupConfig.value('training', 'vae', 'n_epochs')
+    vae_n_epochs_eval = SetupConfig.value('training', 'vae', 'n_epochs_eval')
+    supervised_n_epochs = SetupConfig.value('training', 'supervised', 'n_epochs')
+    supervised_n_epochs_eval = SetupConfig.value('training', 'supervised', 'n_epochs_eval')
+        
     for p, cfg in cfgs:
         #
         # Unsupervised part
         #
         
-        
-        # this allows continuous training with a fixed number of epochs. uuuh yeah.
-        # there is however a side-effect problem here. I am running this on a GPU, `init` and `train` need to be called in order.
-        # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
-        vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
-        vae_training_results = {}
-        vae_eval_results = []
-        
+        # not the best code, but it needs to run... some results are better than none
         try:
-            for u in range(np.int(epochs / eval_steps)):
-                    vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
-                                                              train_dataset=train_dataset, 
-                                                              test_dataset=test_dataset,
-                                                              early_stopping=False,
-                                                              n_epochs=eval_steps)
+            # this allows continuous training with a fixed number of epochs. uuuh yeah.
+            # there is however a side-effect problem here. I am running this on a GPU, `init` and `train` need to be called in order.
+            # it needs to be init->train, init->train, ... init resets the graph, and I guess this will free up memory
+            vae_training_args = vae_training.init(input_shape=X_train.shape[1:], run_config=cfg)
+            # model, losses, ...
+            vae_training_results = {}
+            # paths
+            vae_eval_results = []
+            for u in range(np.int(vae_n_epochs/ vae_n_epochs_eval)):
+                vae_training_results = vae_training.train(**{**vae_training_args, **vae_training_results},
+                                                          train_dataset=train_dataset, 
+                                                          test_dataset=test_dataset,
+                                                          early_stopping=False,
+                                                          n_epochs=vae_n_epochs_eval)
 
-                    vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+                vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
                 #for n, p in vae_eval_results[-1]['plot_paths'].items():
                 #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
 
-            vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
         except Exception:
-            print(f"problem with {vae_training_args}: {traceback.format_exc()}")
-            next()
+            print(f"problem with unsupervised {vae_training_args}: {traceback.format_exc()}")
+            continue
             
+        try:
+            base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
+            base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+
+            vae_training_results['model'] = base_mdl
+            vae_best = eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)
+        except Exception:
+            print(f"problem with loading the model: {traceback.format_exc()}")
+            continue
         #
         # Supervised part
         # 
         
         try:
             # the training process saves the model with the min loss.
-            base_mdl = vae_training_results['model'].__class__(**vae_training_args['model_config'])
-            base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
-
+            
             supervised_training_args = supervised_training.init(model=base_mdl.inference_net, run_config=cfg)
             supervised_training_results = {}
             supervised_eval_results = []
-
-            for u in range(np.int(epochs / eval_steps)):
+            
+            for u in range(np.int(supervised_n_epochs/ supervised_n_epochs_eval)):
                 supervised_training_results = supervised_training.train(**{**supervised_training_args, **supervised_training_results},
                                                           train_dataset=train_dataset, 
                                                           test_dataset=test_dataset,
                                                           early_stopping=False,
-                                                          n_epochs=eval_steps)
+                                                          n_epochs=supervised_n_epochs_eval)
 
                 base_mdl.inference_net = supervised_training_results['model']
                 supervised_training_results['model'] = base_mdl 
-                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
+                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True)]
                 supervised_training_results['model'] = base_mdl.inference_net
 
-            base_mdl.inference_net = supervised_training_results['model']
+            
+            # it always saves the full model
+            base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
+            base_mdl.inference_net.load_weights(supervised_training_args['model_checkpoints_path'])
             supervised_training_results['model'] = base_mdl 
-            supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg)]
-            supervised_training_results['model'] = base_mdl.inference_net
+            supervised_best = eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True)
         except Exception:
-            print(f"problem with {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
-            next()
+            print(f"problem with supervised {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
+            continue
         
+        # too many figures overwise (duh)
         plt.close('all')
         
-        yield (p, 
-               vae_training_results['train_reports'], 
-               vae_training_results['test_reports'],
-               vae_training_args['model_checkpoints_path'],
-               vae_eval_results,
-               supervised_training_results['train_reports'],
-               supervised_training_results['test_reports'],
-               supervised_training_args['model_checkpoints_path'],
-               supervised_eval_results)
+        res = {'parameters': p,
+               'vae': {'train_reports': vae_training_results['train_reports'], 
+                       'test_reports':  vae_training_results['test_reports'],
+                       'model_checkpoints_path': vae_training_args['model_checkpoints_path'],
+                       'best_model_eval_results': vae_best,
+                       'eval_results': vae_eval_results},
+               'supervised': {'train_reports': supervised_training_results['train_reports'],
+                              'test_reports':  supervised_training_results['test_reports'],
+                              'model_checkpoints_path': supervised_training_args['model_checkpoints_path'],
+                              'best_model_eval_results': supervised_best,
+                              'eval_results': supervised_eval_results}}
+        
+        yield res
 
 # <codecell>
 
@@ -543,24 +564,34 @@ from datetime import datetime
 # Either include the data loading into the grid-search or make two runs, one for each DataType
 
 grid_search_params = {
-    'model_impl': config.ModelType.values(),
-    'latent_dim': [1, 2, ]
+    'model_impl': list(config.ModelType),
+    'latent_dim': [2, 4, ],
+    'vae_learning_rate': [1e-4, 1e-6],
+    'supervised_learning_rate': [1e-5, ],
+    'time_series_length': [16, 42],
 }
 
 with warnings.catch_warnings():
     warnings.simplefilter(action='ignore', category=FutureWarning)
+    started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
     if SetupConfig.runs_on_lab_server():
-        started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
-        grid_search_results = list(grid_search(grid_search_params, eval_steps=25, epochs=200))
+        grid_search_results = list(grid_search(grid_search_params))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
     else:
-        pass
-        #grid_search_params = {
-        #    'model_impl': [config.ModelType.SKIPP_PADD_CONV], # config.ModelType.values(),
-        #    'latent_dim': [2, ]
-        #}
-        #grid_search_results = list(grid_search(grid_search_params, eval_steps=4, epochs=5))
-        #misc.dump_results(grid_search_results, 'grid_search_only_vae')
+        grid_search_params = {
+            'model_impl': [config.ModelType.SKIP_PADD_CONV], # config.ModelType.values(),
+            'latent_dim': [2, ]
+        }
+        grid_search_results = list(grid_search(grid_search_params))
+        misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
+
+# <codecell>
+
+grid_search_results
+
+# <codecell>
+
+stop
 
 # <codecell>
 

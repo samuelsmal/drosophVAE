@@ -37,7 +37,7 @@ def train(model,
           train_dataset=None,
           test_dataset=None,
           n_epochs=10,
-          early_stopping=True,
+          early_stopping=False,
           **kwargs):
 
     if train_reports is None:
@@ -82,7 +82,7 @@ def train(model,
                     # simple "loading bar"
                     print('=' * (epoch % 10) + '.' * (10 - (epoch % 10)), end='\r')
 
-                if test_reports[-1][0] < test_reports[cur_min_val_idx][0]:
+                if (test_reports[-1][0] < test_reports[cur_min_val_idx][0]) or epoch == 0:
                     cur_min_val_idx = epoch
                     model.save_weights(model_checkpoints_path)
 

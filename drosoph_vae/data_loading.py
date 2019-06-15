@@ -71,8 +71,8 @@ def load_labelled_data(run_config, setup_config):
 
     data_raw = data_raw.to_dict()
 
-    if run_config['data_type'] == DataType.POS_2D and run_config.value(
-            'pos_2d_params', 'preprocessing', 'normalize_for_each_experiment'):
+    if run_config['data_type'] == DataType.POS_2D and \
+    run_config.preprocessing_parameters()['normalize_for_each_experiment']:
         data_raw = {exp_id: _standarize_(data) for exp_id, data in data_raw.items()}
     else:
         data_raw = {exp_id: (data, (None, None)) for exp_id, data in data_raw.items()}
@@ -88,6 +88,10 @@ def load_labelled_data(run_config, setup_config):
         labelled_sequences = labelled_sequences.filter(lambda x: x.study_id == hubert['study_id'] and x.fly_id == hubert['fly_id'])
         #labelled_sequences = labelled_sequences.filter(lambda x: experiment_key(obj=x) ==
         #                             experiment_key(**SetupConfig.value('hubert')))
+
+    blacklist_behavior = run_config.value('preprocessing', 'common', 'blacklist_behavior')
+    if len(blacklist_behavior) > 0:
+        labelled_sequences = labelled_sequences.filter(lambda x: x.label not in blacklist_behavior)
 
     labelled_sequences = labelled_sequences.map(lambda x: _load_and_fix_(x, data_raw[experiment_key(obj=x)]))
 
