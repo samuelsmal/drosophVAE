@@ -79,7 +79,7 @@ class SetupConfig(BaseConfig):
             },
             'supervised': {
                 'n_epochs': 50,
-                'n_epochs_eval': 5,
+                'n_epochs_eval': 10,
             }
          },
     }

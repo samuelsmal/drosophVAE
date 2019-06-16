@@ -306,7 +306,7 @@ reload(supervised_training)
 from sklearn.metrics import adjusted_mutual_info_score, homogeneity_score, silhouette_score, normalized_mutual_info_score
 from drosoph_vae.settings.data import Experiment, experiment_key
 
-def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False):
+def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False, best=False):
     #
     # Unsupervised part
     #
@@ -318,7 +318,10 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
     epochs = len(training_results['train_reports'])
     
     if supervised:
-        exp_desc_short = 'supervised' + exp_desc_short
+        exp_desc_short = 'supervised_' + exp_desc_short
+        
+    if best:
+        exp_desc_short = 'best_' + exp_desc_short
 
     
     #
@@ -492,7 +495,7 @@ def grid_search(grid_search_params):
             base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
             vae_training_results['model'] = base_mdl
-            vae_best = eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)
+            vae_best = eval_model(vae_training_results, X, X_eval, y, y_frames, cfg, best=True)
         except Exception:
             print(f"problem with loading the model: {traceback.format_exc()}")
             continue
@@ -524,7 +527,7 @@ def grid_search(grid_search_params):
             base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
             base_mdl.inference_net.load_weights(supervised_training_args['model_checkpoints_path'])
             supervised_training_results['model'] = base_mdl 
-            supervised_best = eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True)
+            supervised_best = eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True, best=True)
         except Exception:
             print(f"problem with supervised {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
             continue
