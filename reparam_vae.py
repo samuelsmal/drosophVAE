@@ -132,10 +132,6 @@ y_test = to_int_value(frame_labels[n_train_data_points:])
 frame_labels_train = frame_labels[:n_train_data_points]
 frame_labels_test = frame_labels[n_train_data_points:]
 
-if run_cfg['use_time_series']:
-    X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test = [misc.to_time_series_np(x, sequence_length=run_cfg['time_series_length']) 
-                                        for x in (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)]
-
 # <codecell>
 
 ##
@@ -431,19 +427,23 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
 
 # <codecell>
 
-X = np.vstack((X_train, X_test))
-y = np.vstack((y_train, y_test))
-y_frames = np.vstack((frame_labels_train, frame_labels_test))
-
-train_dataset = to_tf_data(X_train, y_train, batch_size=run_cfg['batch_size'])
-test_dataset = to_tf_data(X_test, y_test, batch_size=run_cfg['batch_size']) 
-
-if run_cfg['use_time_series']:
-    back_to_single_time = np.s_[:, -1, :]
-else:
-    back_to_single_time = np.s_[:]
-    
-X_eval = _reshape_and_rescale_(X[back_to_single_time])
+#if run_cfg['use_time_series']:
+#    X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test = [misc.to_time_series_np(x, sequence_length=run_cfg['time_series_length']) 
+#                                        for x in (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)]
+#
+#X = np.vstack((X_train, X_test))
+#y = np.vstack((y_train, y_test))
+#y_frames = np.vstack((frame_labels_train, frame_labels_test))
+#
+#train_dataset = to_tf_data(X_train, y_train, batch_size=run_cfg['batch_size'])
+#test_dataset = to_tf_data(X_test, y_test, batch_size=run_cfg['batch_size']) 
+#
+#if run_cfg['use_time_series']:
+#    back_to_single_time = np.s_[:, -1, :]
+#else:
+#    back_to_single_time = np.s_[:]
+#    
+#X_eval = _reshape_and_rescale_(X[back_to_single_time])
 
 # <codecell>
 
@@ -461,6 +461,23 @@ def grid_search(grid_search_params):
     supervised_n_epochs_eval = SetupConfig.value('training', 'supervised', 'n_epochs_eval')
         
     for p, cfg in cfgs:
+        if cfg['use_time_series']:
+            X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test = [misc.to_time_series_np(x, sequence_length=cfg['time_series_length']) 
+                                                for x in (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)]
+
+        X = np.vstack((X_train, X_test))
+        y = np.vstack((y_train, y_test))
+        y_frames = np.vstack((frame_labels_train, frame_labels_test))
+
+        train_dataset = to_tf_data(X_train, y_train, batch_size=cfg['batch_size'])
+        test_dataset = to_tf_data(X_test, y_test, batch_size=cfg['batch_size']) 
+
+        if run_cfg['use_time_series']:
+            back_to_single_time = np.s_[:, -1, :]
+        else:
+            back_to_single_time = np.s_[:]
+
+        X_eval = _reshape_and_rescale_(X[back_to_single_time])
         #
         # Unsupervised part
         #
