@@ -132,6 +132,8 @@ y_test = to_int_value(frame_labels[n_train_data_points:])
 frame_labels_train = frame_labels[:n_train_data_points]
 frame_labels_test = frame_labels[n_train_data_points:]
 
+raw_data = (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)
+
 # <codecell>
 
 ##
@@ -302,7 +304,7 @@ reload(supervised_training)
 from sklearn.metrics import adjusted_mutual_info_score, homogeneity_score, silhouette_score, normalized_mutual_info_score
 from drosoph_vae.settings.data import Experiment, experiment_key
 
-def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False, best=False):
+def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=False, best=False, back_to_single_time=None):
     #
     # Unsupervised part
     #
@@ -449,7 +451,7 @@ def eval_model(training_results, X, X_eval, y, y_frames, run_config, supervised=
 
 from itertools import product
 
-def grid_search(grid_search_params):
+def grid_search(grid_search_params, raw_data):
     parameters = product(*grid_search_params.values())
     # it's important that it is a generator, tensorflow might complain overwise 
     # too many writers and such, depends heavily on the computer
@@ -463,7 +465,7 @@ def grid_search(grid_search_params):
     for p, cfg in cfgs:
         if cfg['use_time_series']:
             X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test = [misc.to_time_series_np(x, sequence_length=cfg['time_series_length']) 
-                                                for x in (X_train, X_test, y_train, y_test, frame_labels_train, frame_labels_test)]
+                                                for x in (raw_data)]
 
         X = np.vstack((X_train, X_test))
         y = np.vstack((y_train, y_test))
@@ -472,7 +474,7 @@ def grid_search(grid_search_params):
         train_dataset = to_tf_data(X_train, y_train, batch_size=cfg['batch_size'])
         test_dataset = to_tf_data(X_test, y_test, batch_size=cfg['batch_size']) 
 
-        if run_cfg['use_time_series']:
+        if cfg['use_time_series']:
             back_to_single_time = np.s_[:, -1, :]
         else:
             back_to_single_time = np.s_[:]
@@ -499,7 +501,7 @@ def grid_search(grid_search_params):
                                                           early_stopping=False,
                                                           n_epochs=vae_n_epochs_eval)
 
-                vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg)]
+                vae_eval_results += [eval_model(vae_training_results, X, X_eval, y, y_frames, cfg, back_to_single_time=back_to_single_time)]
                 #for n, p in vae_eval_results[-1]['plot_paths'].items():
                 #    tf_helpers.tf_write_image(vae_training_args['test_summary_writer'], n, p, vae_training_results['train_reports'].shape[0])
 
@@ -512,7 +514,7 @@ def grid_search(grid_search_params):
             base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
 
             vae_training_results['model'] = base_mdl
-            vae_best = eval_model(vae_training_results, X, X_eval, y, y_frames, cfg, best=True)
+            vae_best = eval_model(vae_training_results, X, X_eval, y, y_frames, cfg, best=True, back_to_single_time=back_to_single_time)
         except Exception:
             print(f"problem with loading the model: {traceback.format_exc()}")
             continue
@@ -536,7 +538,7 @@ def grid_search(grid_search_params):
 
                 base_mdl.inference_net = supervised_training_results['model']
                 supervised_training_results['model'] = base_mdl 
-                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True)]
+                supervised_eval_results += [eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True, back_to_single_time=back_to_single_time)]
                 supervised_training_results['model'] = base_mdl.inference_net
 
             
@@ -544,7 +546,7 @@ def grid_search(grid_search_params):
             base_mdl.load_weights(vae_training_args['model_checkpoints_path'])
             base_mdl.inference_net.load_weights(supervised_training_args['model_checkpoints_path'])
             supervised_training_results['model'] = base_mdl 
-            supervised_best = eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True, best=True)
+            supervised_best = eval_model(supervised_training_results, X, X_eval, y, y_frames, cfg, supervised=True, best=True, back_to_single_time=back_to_single_time)
         except Exception:
             print(f"problem with supervised {vae_training_args}\n\t{supervised_training_args}\n\t{traceback.format_exc()}")
             continue
@@ -597,14 +599,14 @@ with warnings.catch_warnings():
     warnings.simplefilter(action='ignore', category=FutureWarning)
     started_at = datetime.now().strftime("%Y%m%d-%H%M%S")
     if SetupConfig.runs_on_lab_server():
-        grid_search_results = list(grid_search(grid_search_params))
+        grid_search_results = list(grid_search(grid_search_params, raw_data=raw_data))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
     else:
         grid_search_params = {
             'model_impl': [config.ModelType.SKIP_PADD_CONV], # config.ModelType.values(),
             'latent_dim': [2, ]
         }
-        grid_search_results = list(grid_search(grid_search_params))
+        grid_search_results = list(grid_search(grid_search_params, raw_data=raw_data))
         misc.dump_results(grid_search_results, f"grid_search_only_vae_{started_at}")
 
 # <codecell>
