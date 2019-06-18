@@ -54,16 +54,14 @@ class DrosophVAESkipConv(DrosophVAE):
         self._layer_sizes_generative = np.linspace(latent_dim, n_start_filters, num=input_shape[-2] - 1, dtype=np.int)
 
         # TODO add MaxPooling
-        self.inference_net = make_inference_net(tfk.Sequential([*[_convolutional_layer_(idx=i,
+        self.inference_net = make_inference_net(tfk.Sequential([_convolutional_layer_(idx=i,
                                                                   filters=fs,
                                                                   kernel_size=2,
                                                                   padding='valid',
                                                                   name=f"inf_{i}",
                                                                   activation=tf.nn.leaky_relu)
-                                            for i, fs in enumerate(self._layer_sizes_inference)],
-                                          tfkl.Flatten(),
-                                          tfkl.Dense(2 * self.latent_dim)],
-                                         name='inference_net'), input_shape, batch_size)
+                                                                for i, fs in enumerate(self._layer_sizes_inference)], name='inference_net'),
+                                                input_shape, batch_size)
 
         self.generative_net = _skip_connection_model_(input_shape=self.latent_dim,
                                                       layer_sizes=self._layer_sizes_generative,

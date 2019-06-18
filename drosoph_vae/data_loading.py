@@ -5,11 +5,12 @@ import json
 import pickle
 import pathlib
 import numpy as np
-from functools import partial
+from pathlib import Path
+from functools import partial, reduce
 from functional import seq
 
 from drosoph_vae.settings import skeleton
-from drosoph_vae.settings.data import EXPERIMENTS, LABELLED_SEQUENCES, experiment_key, Behavior, LabelledSequence
+from drosoph_vae.settings.data import EXPERIMENTS, LABELLED_SEQUENCES, experiment_key, Behavior, LabelledSequence, Experiment
 from drosoph_vae.settings.config import DataType, SetupConfig
 from drosoph_vae import preprocessing
 
@@ -113,7 +114,10 @@ def get_data_and_normalization(experiments, normalize_data=False, dimensions='2d
 
     # TODO wtf?
     ret = seq(experiments).map(partial(positional_data,
-                                dimensions=dimensions,
+                                       base_path=SetupConfig.value('experiment_root_path'),
+                                       experiment_path_template=SetupConfig.value('experiment_path_template'),
+                                       positional_data_path_template=SetupConfig.value('experiment_limb_pos_data_dir'),
+                                       dimensions=dimensions,
                                 return_experiment_id=return_with_experiment_id))\
                    .filter(lambda x: x is not None)\
 
@@ -129,7 +133,7 @@ def get_data_and_normalization(experiments, normalize_data=False, dimensions='2d
                  .map(get_only_first_legs)
 
     if normalize_data:
-        ret = normalize(np.vstack(ret.to_list()))
+        ret = preprocessing.normalize(np.vstack(ret.to_list()))
     else:
         ret = ret.to_list()
 
@@ -140,12 +144,15 @@ def get_data_and_normalization(experiments, normalize_data=False, dimensions='2d
 
 
 def load_all_experiments(data_type,
+                         with_experiment_ids=False,
+                         normalize_data=True,
                          experiment_black_list=SetupConfig.value('experiment_black_list'),
                          fly_black_list=SetupConfig.value('fly_black_list')):
     all_experiments = [e for e in experiments_from_root() if e.study_id not in experiment_black_list
-                       or data.experiment_key(obj=e) in fly_black_list]
-    joint_positions, normalisation_factors = preprocessing.get_data_and_normalization(all_experiments, normalize_data=True,
-                                             dimensions='3d' if data_type == DataType.ANGLE_3D else '2d')
+                       or experiment_key(obj=e) in fly_black_list]
+    return get_data_and_normalization(all_experiments, normalize_data=normalize_data, return_with_experiment_id=with_experiment_ids,
+                                                 dimensions='3d' if data_type == DataType.ANGLE_3D else '2d')
+
 
 def positional_data(experiment, dimensions='2d', pattern='pose_result', base_path=None,
                     experiment_path_template=None, positional_data_path_template=None,  return_experiment_id=False):
@@ -184,7 +191,7 @@ def positional_data(experiment, dimensions='2d', pattern='pose_result', base_pat
     with open(pose, 'rb') as f:
         data = pickle.load(f)[f'points{dimensions}']
         if return_experiment_id:
-            return experiment.key, data
+            return experiment_key(obj=experiment), data
         else:
             return data
 
@@ -238,5 +245,5 @@ def experiments_from_root(root=SetupConfig.value('experiment_root_path')):
                                     .flat_map(lambda p: (c for c in p.iterdir() if c.is_dir()))\
                                     .map(lambda p: reduce(lambda acc, el: ([*acc[0], acc[1].stem], acc[1].parent), range(3), ([], p)))\
                                     .map(lambda pair: list(reversed(pair[0])))\
-                                    .map(lambda ls: Experiment._make(*ls))\
+                                    .map(lambda ls: Experiment(*ls))\
                                     .to_list()

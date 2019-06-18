@@ -588,11 +588,11 @@ from datetime import datetime
 # Either include the data loading into the grid-search or make two runs, one for each DataType
 
 grid_search_params = {
-    'model_impl': list(config.ModelType),
+    'model_impl': [config.ModelType.SKIP_PADD_CONV],
     'latent_dim': [2, 4, ],
     'vae_learning_rate': [1e-4, 1e-6],
     'supervised_learning_rate': [1e-5, ],
-    'time_series_length': [16, 42],
+    'time_series_length': [16, 32],
 }
 
 with warnings.catch_warnings():
@@ -612,6 +612,10 @@ with warnings.catch_warnings():
 # <codecell>
 
 len(grid_search_results)
+
+# <codecell>
+
+[g['parameters'] for g in grid_search_results]
 
 # <codecell>
 
@@ -669,6 +673,10 @@ plt.legend()
 # <codecell>
 
 stop
+
+# <codecell>
+
+grid_search_results[0]['vae']
 
 # <codecell>
 
